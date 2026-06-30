@@ -30,18 +30,20 @@
         - [x] libero_10
         - [x] libero_90
 
-- [ ] processing LIBERO for training LAPA (/home/users/create/smrvmdo/scratch/projects/lapa_finetune/LAPA/datasets/lapa_libero) 
+- [x] processing LIBERO for training LAPA (/home/users/create/smrvmdo/scratch/projects/lapa_finetune/LAPA/datasets/lapa_libero)
+    - script: data/process_libero.py
+    - [x] split data for training and testing (handled inside process_libero.py)
+    ---
+    | Suite          |              Train |                Test |            Số task |               Train episodes |               Test episodes |
+    | -------------- | -----------------: | ------------------: | -----------------: | ---------------------------: | --------------------------: |
+    | LIBERO-Spatial | demo 0–44 mỗi task | demo 45–49 mỗi task |                 10 |                          450 |                          50 |
+    | LIBERO-Object  | demo 0–44 mỗi task | demo 45–49 mỗi task |                 10 |                          450 |                          50 |
+    | LIBERO-Goal    | demo 0–44 mỗi task | demo 45–49 mỗi task |                 10 |                          450 |                          50 |
+    | LIBERO-100     |  toàn bộ LIBERO-90 |   toàn bộ LIBERO-10 | 90 train / 10 test | khoảng 4500 nếu 50 demo/task | khoảng 500 nếu 50 demo/task |
+    ---
+    - [ ] (GPU) Run: python data/process_libero.py --libero_root datasets/libero_raw --output_dir datasets/lapa_libero
 
-- [ ] split data for training and testing
----
-| Suite          |              Train |                Test |            Số task |               Train episodes |               Test episodes |
-| -------------- | -----------------: | ------------------: | -----------------: | ---------------------------: | --------------------------: |
-| LIBERO-Spatial | demo 0–44 mỗi task | demo 45–49 mỗi task |                 10 |                          450 |                          50 |
-| LIBERO-Object  | demo 0–44 mỗi task | demo 45–49 mỗi task |                 10 |                          450 |                          50 |
-| LIBERO-Goal    | demo 0–44 mỗi task | demo 45–49 mỗi task |                 10 |                          450 |                          50 |
-| LIBERO-100     |  toàn bộ LIBERO-90 |   toàn bộ LIBERO-10 | 90 train / 10 test | khoảng 4500 nếu 50 demo/task | khoảng 500 nếu 50 demo/task |
----
-
-- [ ] Write lapa_finetune/LAPA/scripts/finetune_libero_full.sh for training with 4 suite (shuffle data) and testing on test set using config following LAPA/scripts/finetune_real.sh
+- [x] Write lapa_finetune/LAPA/scripts/finetune_libero_full.sh for training with 4 suite (shuffle data) and testing on test set using config following LAPA/scripts/finetune_real.sh
+    - [ ] (GPU) Set absolute_path and run: ./scripts/finetune_libero_full.sh
 
 - [ ] Create mocktest for lapa_finetune/LAPA/scripts/finetune_libero_full.sh
