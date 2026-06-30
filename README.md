@@ -161,6 +161,22 @@ depth feature, edit `--depth_feature_key` in
 `scripts/finetune_depth_fusion_libero.sh`. For an oracle upper-bound experiment,
 use `z_depth_feature_gt`.
 
+For a lightweight smoke test with a small number of samples/batches:
+
+```bash
+PYTHONPATH="$PWD" python -m latent_pretraining.depth_fusion.train_depth_fusion \
+  --data_dir /path/to/features_depth_branch \
+  --output_dir outputs/depth_fusion_smoke \
+  --depth_feature_key z_depth_feature_pred_model7_1 \
+  --epochs 1 \
+  --batch_size 32 \
+  --max_samples 256 \
+  --max_train_batches 2 \
+  --max_val_batches 1 \
+  --num_workers 0 \
+  --device cpu
+```
+
 The new code lives in `latent_pretraining/depth_fusion/`:
 
 - `model.py`: the fusion MLP action head.

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset, random_split
 from tqdm import tqdm
 
 from latent_pretraining.depth_fusion.data_libero import (
@@ -30,20 +30,26 @@ def parse_args():
     parser.add_argument("--hidden_dim", type=int, default=2048)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--max_samples", type=int, default=None)
+    parser.add_argument("--max_train_batches", type=int, default=None)
+    parser.add_argument("--max_val_batches", type=int, default=None)
     parser.add_argument("--no_preload", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
 
 
-def run_epoch(model, loader, criterion, optimizer, device, train):
+def run_epoch(model, loader, criterion, optimizer, device, train, max_batches=None):
     model.train(train)
     total_loss = 0.0
     total_count = 0
 
     context = torch.enable_grad() if train else torch.no_grad()
     with context:
-        for batch in tqdm(loader, leave=False):
+        for batch_index, batch in enumerate(tqdm(loader, leave=False)):
+            if max_batches is not None and batch_index >= max_batches:
+                break
+
             rgb_feature = batch["rgb_feature"].to(device)
             depth_feature = batch["depth_feature"].to(device)
             action = batch["action"].to(device)
@@ -77,6 +83,8 @@ def main():
         action_key=args.action_key,
         preload=not args.no_preload,
     )
+    if args.max_samples is not None:
+        dataset = Subset(dataset, range(min(args.max_samples, len(dataset))))
 
     val_size = int(len(dataset) * args.val_fraction)
     train_size = len(dataset) - val_size
@@ -109,8 +117,24 @@ def main():
     best_val = float("inf")
     history = []
     for epoch in range(1, args.epochs + 1):
-        train_loss = run_epoch(model, train_loader, criterion, optimizer, args.device, train=True)
-        val_loss = run_epoch(model, val_loader, criterion, optimizer, args.device, train=False)
+        train_loss = run_epoch(
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            args.device,
+            train=True,
+            max_batches=args.max_train_batches,
+        )
+        val_loss = run_epoch(
+            model,
+            val_loader,
+            criterion,
+            optimizer,
+            args.device,
+            train=False,
+            max_batches=args.max_val_batches,
+        )
         record = {"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss}
         history.append(record)
         print(json.dumps(record))
