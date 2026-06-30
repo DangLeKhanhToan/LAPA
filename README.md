@@ -107,6 +107,78 @@ After finetuning, to deploy the model, run the following command:
 python -m latent_pretraining.deploy --load_checkpoint "params::/path_to_the_finetuned_ckpt" --action_scale_file "data/real_finetune.csv"
 ```
 where `load_checkpoint` includes the path to the finet-uned checkpoint and `action_scale_file` includes the path to the csv file constructed during data preprocessing of fine-tuning dataset.
+
+## LIBERO Depth-Fusion Fine-Tuning
+
+This fork adds a depth-fusion fine-tuning path for LIBERO. The goal is to keep the
+depth branch as a clean interface while another model/codebase provides the
+1024-dimensional depth feature.
+
+The first supported mode is offline training from precomputed feature shards.
+Each `.pt` shard should follow the format provided by the depth-feature pipeline:
+
+```python
+{
+    "z_rgb_feature_input": Tensor[N, 4096],
+    "z_depth_feature_gt": Tensor[N, 1024],
+    "z_depth_feature_pred_model7_1": Tensor[N, 1024],
+    "action_vector": Tensor[N, 7],
+}
+```
+
+Only three tensors are required for a training run:
+
+- `z_rgb_feature_input`: the 4096-dimensional RGB/origin-branch feature.
+- one selected depth feature key, for example `z_depth_feature_pred_model7_1`.
+- `action_vector`: the 7-dimensional target action.
+
+The training architecture is:
+
+```text
+z_rgb_feature_input (4096) + selected depth feature (1024)
+    -> DepthFusionPolicy MLP
+    -> action_vector (7)
+```
+
+Place the LIBERO train shards under:
+
+```text
+data/libero_depth_fusion/
+  all_models_train_libero10_manifest.json
+  all_models_train_libero10_part00000.pt
+  all_models_train_libero10_part00001.pt
+  ...
+```
+
+Then run:
+
+```bash
+./scripts/finetune_depth_fusion_libero.sh
+```
+
+The script defaults to `z_depth_feature_pred_model7_1`. To train with another
+depth feature, edit `--depth_feature_key` in
+`scripts/finetune_depth_fusion_libero.sh`. For an oracle upper-bound experiment,
+use `z_depth_feature_gt`.
+
+The new code lives in `latent_pretraining/depth_fusion/`:
+
+- `model.py`: the fusion MLP action head.
+- `data_libero.py`: LIBERO `.pt` shard loader.
+- `train_depth_fusion.py`: offline training entrypoint.
+- `depth_branch_stub.py`: blank online depth-branch interface for future rollout inference.
+
+For online inference, the depth branch owner should later implement:
+
+```python
+depth_feature = depth_branch.encode(
+    rgb_image,
+    instruction=instruction,
+    latent_action_4096=rgb_feature,
+)
+```
+
+The returned `depth_feature` must be a `float32` vector with shape `(1024,)`.
  
 ## Latent Action Quantization 
 We provide the code for latent action quantization pretraining.
