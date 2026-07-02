@@ -143,8 +143,11 @@ def main(args):
     # ── Step 3 & 4: Write per-suite JSONL files and combined files ────────────
     def make_record(instruction, raw_action, img_rel):
         action_bins = [str(assign_bin(raw_action[i], total_bin[i])) for i in range(7)]
+        # Prompt must match the inference sampler (DeltaActionSampler.__call__), which wraps
+        # the task language as: "... USER: What action should the robot take to `{task}` ASSISTANT: ..."
+        # Training/eval prompt consistency is critical for the fine-tuned action head.
         return {
-            'instruction': f'<s> You are a helpful assistant. USER: {instruction} ASSISTANT:',
+            'instruction': f'<s> You are a helpful assistant. USER: What action should the robot take to `{instruction}` ASSISTANT:',
             'image': img_rel,
             'raw_actions': raw_action,
             'action': action_bins,
