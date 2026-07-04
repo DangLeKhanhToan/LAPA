@@ -16,22 +16,33 @@ export experiment_note='lapa_finetune_libero'
 export dataset_path="$absolute_path/datasets/lapa_libero/all_train.jsonl"
 export experiment_id='finetune_libero_full'
 
+# config mesh_dim, total_steps, save_milestone_freq, load_checkpoint, action_vocab_size, batch_size
+# Training config
+export mesh_dim='!-1,4,1,1'
+export total_steps=20000
+export save_milestone_freq=2000
+export load_checkpoint="$absolute_path/lapa_checkpoints/streaming_params_22485"
+
+# Model config
+export action_vocab_size=219
+export batch_size=128
+
 python3 -u -m latent_pretraining.train \
     --modality='vision,action,delta' \
-    --mesh_dim='!-1,4,1,1' \
+    --mesh_dim="$mesh_dim" \
     --dtype='bf16' \
-    --total_steps=2000 \
+    --total_steps="$total_steps" \
     --log_freq=1 \
     --eval_steps=0 \
     --save_model_freq=0 \
     --eval_log_freq=100 \
-    --save_milestone_freq=1000 \
+    --save_milestone_freq="$save_milestone_freq" \
     --load_llama_config='7b' \
-    --load_checkpoint="params::$absolute_path/lapa_checkpoints/params" \
-    --update_llama_config="dict(action_vocab_size=219,delta_vocab_size=8,theta=50000000,max_sequence_length=2048,use_flash_attention=True,scan_attention=True,scan_query_chunk_size=512,scan_key_chunk_size=1024,remat_attention='nothing_saveable',scan_mlp=True,scan_mlp_chunk_size=8192,remat_mlp='nothing_saveable',remat_block='nothing_saveable',scan_layers=True)" \
+    --load_checkpoint="params::$load_checkpoint" \
+    --update_llama_config="dict(action_vocab_size=$action_vocab_size,delta_vocab_size=8,theta=50000000,max_sequence_length=2048,use_flash_attention=True,scan_attention=True,scan_query_chunk_size=512,scan_key_chunk_size=1024,remat_attention='nothing_saveable',scan_mlp=True,scan_mlp_chunk_size=8192,remat_mlp='nothing_saveable',remat_block='nothing_saveable',scan_layers=True)" \
     --tokenizer.vocab_file="$llama_tokenizer_path" \
     --optimizer.type='adamw' \
-    --llama.action_vocab_size=219 \
+    --llama.action_vocab_size="$action_vocab_size" \
     --llama.delta_vocab_size=8 \
     --optimizer.accumulate_gradient_steps=1 \
     --optimizer.adamw_optimizer.weight_decay=0 \
@@ -51,7 +62,7 @@ python3 -u -m latent_pretraining.train \
     --train_dataset.json_delta_action_dataset.mode="pad" \
     --train_dataset.json_delta_action_dataset.path="$dataset_path" \
     --train_dataset.json_delta_action_dataset.seq_length=384 \
-    --train_dataset.json_delta_action_dataset.batch_size=400 \
+    --train_dataset.json_delta_action_dataset.batch_size="$batch_size" \
     --train_dataset.json_delta_action_dataset.tokenizer_processes=1 \
     --train_dataset.json_delta_action_dataset.tokenizer_parallel_chunk_size=128 \
     --train_dataset.json_delta_action_dataset.tokenizer_parallel_batch_size=128 \
