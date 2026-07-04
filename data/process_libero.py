@@ -77,8 +77,10 @@ def process_hdf5(hdf5_path, suite, output_dir, camera):
             for t in range(T):
                 img_rel = f'images/{suite}/{task_stem}/demo_{demo_idx}/step_{t}.jpg'
                 img_abs = output_dir / img_rel
-                if not img_abs.exists():
-                    Image.fromarray(images_arr[t]).save(img_abs)
+                # LIBERO stores frames in OpenGL convention (origin at bottom-left),
+                # so flip vertically to get upright images. Always overwrite so a
+                # re-run replaces images saved by older versions of this script.
+                Image.fromarray(images_arr[t][::-1]).save(img_abs)
 
                 records.append((demo_idx, t, instruction, actions[t].tolist(), img_rel))
 
