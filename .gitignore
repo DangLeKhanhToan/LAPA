@@ -5,3 +5,5 @@ datasets/
 CLAUDE.md
 outputs/
 report.md
+pbs_logs/
+run_job.pbs
