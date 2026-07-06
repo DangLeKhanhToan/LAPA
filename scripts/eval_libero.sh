@@ -15,8 +15,10 @@ cd "$PROJECT_DIR"
 export absolute_path="$PROJECT_DIR"
 
 # --- Interpreters / paths -------------------------------------------------
-MODEL_PY=/scratch/users/create/smrvmdo/venvs/lapa-depth/bin/python
-LIBERO_PY=/scratch/users/create/smrvmdo/venvs/LIBERO/bin/python
+# On this machine the conda `lapa` env has both the JAX stack (server) and
+# mujoco/robosuite (client), so one interpreter serves both roles.
+MODEL_PY="${MODEL_PY:-/home/linhkastner/miniconda3/envs/lapa/bin/python}"
+LIBERO_PY="${LIBERO_PY:-/home/linhkastner/miniconda3/envs/lapa/bin/python}"
 LIBERO_REPO="$absolute_path/datasets/LIBERO"   # editable install is broken; put repo on PYTHONPATH
 
 # --- Config (override via env) --------------------------------------------
@@ -30,11 +32,11 @@ PORT="${PORT:-32820}"
 SUITES="${SUITES:-libero_spatial libero_object libero_goal libero_10}"
 N_EVAL_PER_TASK="${N_EVAL_PER_TASK:-5}"
 
-# --- Rendering: run the client inside a singularity container with --nv -----
-# The bare node has no GL/EGL stack, so offscreen rendering fails. singularity
-# --nv mounts the host NVIDIA driver GL libs into a glvnd container -> GPU EGL.
-# Set USE_SINGULARITY=1 to enable (default on, since bare-node rendering fails).
-USE_SINGULARITY="${USE_SINGULARITY:-1}"
+# --- Rendering: singularity is only needed on nodes WITHOUT a GL/EGL stack ---
+# This machine has the NVIDIA EGL vendor ICD installed (native offscreen GPU
+# rendering works), so default off. Set USE_SINGULARITY=1 on bare HPC nodes to
+# run the client in a glvnd container with --nv instead.
+USE_SINGULARITY="${USE_SINGULARITY:-0}"
 # glvnd runtime image; ubuntu22.04 matches the venv's glibc (python built on 22.04).
 RENDER_SIF_URL="${RENDER_SIF_URL:-docker://nvidia/opengl:1.2-glvnd-runtime-ubuntu22.04}"
 RENDER_SIF="${RENDER_SIF:-/scratch/users/create/smrvmdo/venvs/opengl_glvnd.sif}"
@@ -43,6 +45,37 @@ export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-/scratch/users/create/smrvmdo/.
 export SINGULARITY_CACHEDIR="$APPTAINER_CACHEDIR"
 export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-/scratch/users/create/smrvmdo/.singularity_tmp}"
 export SINGULARITY_TMPDIR="$APPTAINER_TMPDIR"
+
+# --- GPU selection ---------------------------------------------------------
+# GPU_MODE=utilize -> pick free GPUs automatically (sorted by free memory):
+# the freest for the JAX server, the next-freest for the client's EGL renderer,
+# so the two heavy processes land on different idle GPUs. Explicitly set
+# CUDA_VISIBLE_DEVICES / MUJOCO_EGL_DEVICE_ID still take precedence.
+# Any other value (default: unset) -> original behavior, both default to GPU 0.
+GPU_MODE="${GPU_MODE:-}"
+SERVER_GPU="${CUDA_VISIBLE_DEVICES:-0}"
+CLIENT_GPU="${MUJOCO_EGL_DEVICE_ID:-0}"
+if [ "${GPU_MODE}" = "utilize" ]; then
+    mapfile -t GPUS_BY_FREE < <(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits \
+        | sort -t, -k2,2 -rn | awk -F, '{gsub(/ /,"",$1); print $1}')
+    if [ "${#GPUS_BY_FREE[@]}" -eq 0 ]; then
+        echo "ERROR: GPU_MODE=utilize but nvidia-smi listed no GPUs"; exit 1
+    fi
+    SERVER_GPU="${CUDA_VISIBLE_DEVICES:-${GPUS_BY_FREE[0]}}"
+    CLIENT_GPU="${MUJOCO_EGL_DEVICE_ID:-${GPUS_BY_FREE[1]:-${GPUS_BY_FREE[0]}}}"
+    # If the auto-picked client GPU collides with the server GPU (e.g. the user
+    # pinned CUDA_VISIBLE_DEVICES), move the client to the next free GPU.
+    if [ -z "${MUJOCO_EGL_DEVICE_ID:-}" ] && [ "${CLIENT_GPU}" = "${SERVER_GPU}" ]; then
+        for g in "${GPUS_BY_FREE[@]}"; do
+            if [ "$g" != "${SERVER_GPU}" ]; then CLIENT_GPU="$g"; break; fi
+        done
+    fi
+    SERVER_FREE_MIB=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "${SERVER_GPU}")
+    if [ "${SERVER_FREE_MIB}" -lt 16000 ]; then
+        echo "[eval] WARNING: server GPU ${SERVER_GPU} has only ${SERVER_FREE_MIB} MiB free (7B bf16 needs ~15 GiB)"
+    fi
+    echo "[eval] GPU_MODE=utilize: server GPU=${SERVER_GPU}, client EGL GPU=${CLIENT_GPU}"
+fi
 
 if [ ! -f "${ACTION_SCALE_FILE}" ]; then
     echo "ERROR: action scale file not found: ${ACTION_SCALE_FILE}"
@@ -71,7 +104,7 @@ fi
 
 # --- 1) Start the LAPA action server (background) -------------------------
 echo "[eval] starting LAPA server on port ${PORT} (checkpoint: ${FINETUNED_CHECKPOINT})"
-CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
+CUDA_VISIBLE_DEVICES="${SERVER_GPU}" \
 "$MODEL_PY" -m latent_pretraining.deploy \
     --load_checkpoint "${FINETUNED_CHECKPOINT}" \
     --action_scale_file "${ACTION_SCALE_FILE}" \
@@ -95,13 +128,14 @@ trap cleanup EXIT
 # --- 2) Run the LIBERO rollout client -------------------------------------
 # Client retries the connection (default 60 x 10s = 10 min) while the 7B model loads.
 MUJOCO_GL="${MUJOCO_GL:-egl}"
-DEV="${MUJOCO_EGL_DEVICE_ID:-0}"
+DEV="${CLIENT_GPU}"
 CLIENT_ARGS=(
     "$absolute_path/eval/eval_libero_rollout.py"
     --server_url "http://127.0.0.1:${PORT}/act"
     --output_dir "${OUTPUT_DIR}"
     --suites ${SUITES}
     --n_eval_per_task "${N_EVAL_PER_TASK}"
+    --flip_for_model 
 )
 
 if [ "${USE_SINGULARITY}" = "1" ]; then
