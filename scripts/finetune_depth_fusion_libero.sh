@@ -4,19 +4,20 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PYTHONPATH:$PROJECT_DIR"
 
 # Set this to the directory containing:
-#   all_models_train_libero10_manifest.json
-#   all_models_train_libero10_part00000.pt
+#   z_depth_train_shard0_model4_manifest.json
+#   z_depth_train_shard0_model4_part00000.pt
 #   ...
 export LIBERO_DEPTH_FUSION_DIR="${LIBERO_DEPTH_FUSION_DIR:-$PROJECT_DIR/data/libero_depth_fusion}"
+export LIBERO_DEPTH_FUSION_MANIFEST="${LIBERO_DEPTH_FUSION_MANIFEST:-$LIBERO_DEPTH_FUSION_DIR/z_depth_train_shard0_model4_manifest.json}"
 export OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_DIR/outputs/depth_fusion_libero}"
 
 python3 -u -m latent_pretraining.depth_fusion.train_depth_fusion \
     --data_dir "$LIBERO_DEPTH_FUSION_DIR" \
-    --manifest "$LIBERO_DEPTH_FUSION_DIR/all_models_train_libero10_manifest.json" \
+    --manifest "$LIBERO_DEPTH_FUSION_MANIFEST" \
     --output_dir "$OUTPUT_DIR" \
-    --rgb_feature_key "z_rgb_feature_input" \
-    --depth_feature_key "z_depth_feature_pred_model7_1" \
-    --action_key "action_vector" \
+    --rgb_feature_key "auto" \
+    --depth_feature_key "auto" \
+    --action_key "auto" \
     --epochs 20 \
     --batch_size 256 \
     --lr 1e-4 \

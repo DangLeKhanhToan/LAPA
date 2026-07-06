@@ -10,6 +10,7 @@ from tqdm import tqdm
 from latent_pretraining.depth_fusion.data_libero import (
     LiberoDepthFusionDataset,
     discover_part_files,
+    load_manifest,
 )
 from latent_pretraining.depth_fusion.model import DepthFusionConfig, DepthFusionPolicy
 
@@ -19,9 +20,10 @@ def parse_args():
     parser.add_argument("--data_dir", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, default=None)
     parser.add_argument("--output_dir", type=Path, required=True)
-    parser.add_argument("--rgb_feature_key", type=str, default="z_rgb_feature_input")
-    parser.add_argument("--depth_feature_key", type=str, default="z_depth_feature_pred_model7_1")
-    parser.add_argument("--action_key", type=str, default="action_vector")
+    parser.add_argument("--rgb_feature_key", type=str, default="auto")
+    parser.add_argument("--depth_feature_key", type=str, default="auto")
+    parser.add_argument("--action_key", type=str, default="auto")
+    parser.add_argument("--image_key", type=str, default="auto")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -75,13 +77,31 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = args.manifest if args.manifest is not None else None
+    manifest = load_manifest(manifest_path)
     part_files = discover_part_files(args.data_dir, manifest_path)
     dataset = LiberoDepthFusionDataset(
         part_files=part_files,
+        manifest=manifest,
         rgb_feature_key=args.rgb_feature_key,
         depth_feature_key=args.depth_feature_key,
         action_key=args.action_key,
+        image_key=args.image_key,
         preload=not args.no_preload,
+    )
+    print(
+        json.dumps(
+            {
+                "resolved_keys": {
+                    "rgb_feature_key": dataset.rgb_feature_key,
+                    "depth_feature_key": dataset.depth_feature_key,
+                    "action_key": dataset.action_key,
+                    "image_key": dataset.image_key,
+                },
+                "num_parts": len(part_files),
+                "num_samples": len(dataset),
+            },
+            indent=2,
+        )
     )
     if args.max_samples is not None:
         dataset = Subset(dataset, range(min(args.max_samples, len(dataset))))
