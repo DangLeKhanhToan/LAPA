@@ -31,6 +31,67 @@ PYTHONPATH="$PWD" python -m latent_pretraining.depth_fusion.inspect_pt_shard \
 The inspector prints all `.pt` keys, tensor shapes, inferred RGB/depth/action/image
 keys, and a few sample image identifiers when present.
 
+Your current inspected shards show two important cases:
+
+- model4 depth shards contain `z_depth_feature_pred` and `id`, but not
+  `z_rgb_feature_input` or actions.
+- model2 depth shards contain `z_rgb_feature_input`, `z_depth_feature_pred`, and
+  `id`, but not actions.
+
+For training, missing sources can be joined by `id`:
+
+```bash
+PYTHONPATH="$PWD" python -m latent_pretraining.depth_fusion.train_depth_fusion \
+  --data_dir /path/to/z_depth_train_shard0 \
+  --manifest /path/to/z_depth_train_shard0/z_depth_train_shard0_model4_manifest.json \
+  --rgb_data_dir /path/to/z_rgb_train_shard0 \
+  --rgb_manifest /path/to/z_rgb_train_shard0/z_rgb_train_shard0_manifest.json \
+  --action_jsonl /path/to/libero_actions.jsonl \
+  --output_dir outputs/depth_fusion_smoke \
+  --epochs 1 \
+  --max_samples 2048 \
+  --max_train_batches 8 \
+  --max_val_batches 2
+```
+
+The convenience smoke script wraps the same command:
+
+```bash
+DEPTH_DATA_DIR=/path/to/z_depth_train_shard0 \
+DEPTH_MANIFEST=/path/to/z_depth_train_shard0/z_depth_train_shard0_model4_manifest.json \
+RGB_DATA_DIR=/path/to/z_rgb_train_shard0 \
+RGB_MANIFEST=/path/to/z_rgb_train_shard0/z_rgb_train_shard0_manifest.json \
+ACTION_JSONL=/path/to/libero_actions.jsonl \
+./scripts/smoke_finetune_depth_fusion_libero.sh
+```
+
+After smoke training, quickly verify checkpoint loading and feature fusion:
+
+```bash
+PYTHONPATH="$PWD" python -m latent_pretraining.depth_fusion.predict_depth_fusion \
+  --checkpoint outputs/depth_fusion_smoke/best.pt \
+  --data_dir /path/to/z_depth_train_shard0 \
+  --manifest /path/to/z_depth_train_shard0/z_depth_train_shard0_model4_manifest.json \
+  --rgb_data_dir /path/to/z_rgb_train_shard0 \
+  --rgb_manifest /path/to/z_rgb_train_shard0/z_rgb_train_shard0_manifest.json \
+  --output_jsonl outputs/depth_fusion_smoke/predictions.jsonl \
+  --max_samples 32
+```
+
+For a single server-side pipeline script, set the required paths and run:
+
+```bash
+DEPTH_DATA_DIR=/path/to/stage25_model4/z_depth_train_shard0 \
+DEPTH_MANIFEST=/path/to/stage25_model4/z_depth_train_shard0/z_depth_train_shard0_model4_manifest.json \
+RGB_DATA_DIR=/path/to/z_rgb_train_shard0 \
+RGB_MANIFEST=/path/to/z_rgb_train_shard0/z_rgb_train_shard0_manifest.json \
+ACTION_JSONL=/path/to/libero_actions.jsonl \
+./scripts/run_depth_fusion_stage3_pipeline.sh
+```
+
+This runs inspection, smoke fine-tuning, smoke checkpoint prediction, and full
+offline depth-fusion fine-tuning in order.
+
 The training model is:
 
 ```text

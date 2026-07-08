@@ -19,11 +19,20 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train LIBERO depth-fusion action head.")
     parser.add_argument("--data_dir", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, default=None)
+    parser.add_argument("--rgb_data_dir", type=Path, default=None)
+    parser.add_argument("--rgb_manifest", type=Path, default=None)
+    parser.add_argument("--action_data_dir", type=Path, default=None)
+    parser.add_argument("--action_manifest", type=Path, default=None)
+    parser.add_argument("--action_jsonl", type=Path, default=None)
     parser.add_argument("--output_dir", type=Path, required=True)
     parser.add_argument("--rgb_feature_key", type=str, default="auto")
     parser.add_argument("--depth_feature_key", type=str, default="auto")
     parser.add_argument("--action_key", type=str, default="auto")
     parser.add_argument("--image_key", type=str, default="auto")
+    parser.add_argument("--rgb_id_key", type=str, default="auto")
+    parser.add_argument("--action_id_key", type=str, default="auto")
+    parser.add_argument("--action_jsonl_id_key", type=str, default="id")
+    parser.add_argument("--action_jsonl_key", type=str, default="auto")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -79,13 +88,36 @@ def main():
     manifest_path = args.manifest if args.manifest is not None else None
     manifest = load_manifest(manifest_path)
     part_files = discover_part_files(args.data_dir, manifest_path)
+    rgb_manifest_path = args.rgb_manifest if args.rgb_manifest is not None else None
+    rgb_manifest = load_manifest(rgb_manifest_path)
+    rgb_part_files = (
+        discover_part_files(args.rgb_data_dir, rgb_manifest_path)
+        if args.rgb_data_dir is not None
+        else None
+    )
+    action_manifest_path = args.action_manifest if args.action_manifest is not None else None
+    action_manifest = load_manifest(action_manifest_path)
+    action_part_files = (
+        discover_part_files(args.action_data_dir, action_manifest_path)
+        if args.action_data_dir is not None
+        else None
+    )
     dataset = LiberoDepthFusionDataset(
         part_files=part_files,
         manifest=manifest,
+        rgb_part_files=rgb_part_files,
+        rgb_manifest=rgb_manifest,
+        action_part_files=action_part_files,
+        action_manifest=action_manifest,
+        action_jsonl=args.action_jsonl,
+        action_jsonl_id_key=args.action_jsonl_id_key,
+        action_jsonl_key=args.action_jsonl_key,
         rgb_feature_key=args.rgb_feature_key,
         depth_feature_key=args.depth_feature_key,
         action_key=args.action_key,
         image_key=args.image_key,
+        rgb_id_key=args.rgb_id_key,
+        action_id_key=args.action_id_key,
         preload=not args.no_preload,
     )
     print(
@@ -98,6 +130,8 @@ def main():
                     "image_key": dataset.image_key,
                 },
                 "num_parts": len(part_files),
+                "num_rgb_parts": len(rgb_part_files) if rgb_part_files is not None else 0,
+                "num_action_parts": len(action_part_files) if action_part_files is not None else 0,
                 "num_samples": len(dataset),
             },
             indent=2,
