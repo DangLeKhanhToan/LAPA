@@ -12,6 +12,7 @@ from latent_pretraining.depth_fusion.data_libero import (
     discover_part_files,
     load_manifest,
 )
+from latent_pretraining.depth_fusion.id_mapping import resolve_lapa_sample_id
 
 
 def parse_args():
@@ -22,6 +23,13 @@ def parse_args():
     parser.add_argument("--depth_data_dir", type=Path, required=True, help="Directory containing depth .pt/.pth parts.")
     parser.add_argument("--depth_manifest", type=Path, default=None, help="Optional depth manifest JSON.")
     parser.add_argument("--json_id_key", type=str, default="id", help="ID field in the LAPA JSONL.")
+    parser.add_argument(
+        "--json_id_source",
+        type=str,
+        default="auto",
+        choices=("auto", "id", "image"),
+        help="Use JSON id field, derive from image path, or try id then image.",
+    )
     parser.add_argument("--depth_id_key", type=str, default="auto", help="ID field in the depth shards.")
     parser.add_argument("--depth_feature_key", type=str, default="auto", help="Feature key in the depth shards.")
     parser.add_argument("--sample_count", type=int, default=5, help="Number of matched/missing examples to print.")
@@ -35,6 +43,13 @@ def iter_jsonl(path):
                 continue
             item = json.loads(line)
             yield line_number, item
+
+
+def safe_resolve_sample_id(item, args):
+    try:
+        return resolve_lapa_sample_id(item, id_key=args.json_id_key, source=args.json_id_source), None
+    except ValueError as exc:
+        return None, str(exc)
 
 
 def main():
@@ -72,15 +87,17 @@ def main():
     missing_json_id = 0
     for line_number, item in iter_jsonl(args.jsonl):
         total += 1
-        sample_id = item.get(args.json_id_key)
+        sample_id, resolve_error = safe_resolve_sample_id(item, args)
         if sample_id is None:
             missing_json_id += 1
             if len(missing) < args.sample_count:
                 missing.append(
                     {
                         "line": line_number,
-                        "reason": f"missing_json_id_key:{args.json_id_key}",
+                        "reason": f"could_not_resolve_json_id:{args.json_id_source}:{args.json_id_key}",
                         "available_keys": sorted(item.keys()),
+                        "image": item.get("image"),
+                        "resolve_error": resolve_error,
                     }
                 )
             continue
@@ -111,7 +128,11 @@ def main():
                 }
             )
 
-    matched_count = sum(1 for _, item in iter_jsonl(args.jsonl) if str(item.get(args.json_id_key)) in depth_index)
+    matched_count = sum(
+        1
+        for _, item in iter_jsonl(args.jsonl)
+        if safe_resolve_sample_id(item, args)[0] in depth_index
+    )
     result = {
         "depth": {
             "data_dir": str(args.depth_data_dir),
@@ -126,6 +147,7 @@ def main():
         "jsonl": {
             "path": str(args.jsonl),
             "json_id_key": args.json_id_key,
+            "json_id_source": args.json_id_source,
             "total_rows": total,
             "missing_json_id": missing_json_id,
             "matched_rows": matched_count,

@@ -13,6 +13,7 @@ export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_megacore_fusion_allow_ags
 
 DEPTH_MANIFEST="${DEPTH_MANIFEST:-}"
 JSON_ID_KEY="${JSON_ID_KEY:-id}"
+JSON_ID_SOURCE="${JSON_ID_SOURCE:-auto}"
 DEPTH_ID_KEY="${DEPTH_ID_KEY:-auto}"
 DEPTH_FEATURE_KEY="${DEPTH_FEATURE_KEY:-auto}"
 DEPTH_FEATURE_DIM="${DEPTH_FEATURE_DIM:-1024}"
@@ -58,6 +59,7 @@ args=(
   --train_dataset.type="json_vision_delta_action"
   --train_dataset.delta_vision_action_processor.fields_from_example="fields"
   --train_dataset.delta_vision_action_processor.sample_id_key="$JSON_ID_KEY"
+  --train_dataset.delta_vision_action_processor.sample_id_source="$JSON_ID_SOURCE"
   --train_dataset.delta_vision_action_processor.n_tokens_per_action=7
   --train_dataset.delta_vision_action_processor.n_tokens_per_delta=4
   --train_dataset.delta_vision_action_processor.img_aug=True

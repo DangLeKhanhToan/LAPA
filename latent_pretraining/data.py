@@ -12,6 +12,7 @@ import jax
 from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import PartitionSpec as PS
 from datasets import load_dataset
+from latent_pretraining.depth_fusion.id_mapping import resolve_lapa_sample_id
 import random
 import time
 
@@ -622,6 +623,7 @@ class DeltaVisionActionProcessor(object):
         config.vqgan_checkpoint_path = ''
         config.image_absolute_path = ''
         config.sample_id_key = 'id'
+        config.sample_id_source = 'id'
         if updates is not None:
             config.update(ConfigDict(updates).copy_and_resolve_references())
         return config
@@ -648,7 +650,11 @@ class DeltaVisionActionProcessor(object):
         else:
             aux = tuple()
         rand_state = random.Random(aux[-1]) # makes augmentations deterministic by line number
-        sample_id = example.get(self.config.sample_id_key)
+        sample_id = resolve_lapa_sample_id(
+            example,
+            id_key=self.config.sample_id_key,
+            source=self.config.sample_id_source,
+        )
         token_buffer = []
         loss_mask_buffer = []
         vision_mask = []
