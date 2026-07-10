@@ -19,7 +19,7 @@ VOCAB_FILE="${VOCAB_FILE:-$LAPA_ROOT/lapa_checkpoints/tokenizer.model}"
 DEPTH_MANIFEST="${DEPTH_MANIFEST:-}"
 DEPTH_FEATURE_KEY="${DEPTH_FEATURE_KEY:-auto}"
 DEPTH_ID_KEY="${DEPTH_ID_KEY:-auto}"
-IMAGE_ROOT="${IMAGE_ROOT:-$LAPA_ROOT/data}"
+IMAGE_ROOT="${IMAGE_ROOT:-$LAPA_ROOT/datasets/libero_data}"
 OUTPUT_JSON="${OUTPUT_JSON:-$LAPA_ROOT/outputs/smoke_lapa_depth_replay/results.json}"
 PORT="${PORT:-32820}"
 TOKENS_PER_DELTA="${TOKENS_PER_DELTA:-4}"
@@ -49,6 +49,8 @@ if [[ -n "$DEPTH_MANIFEST" ]]; then
 fi
 
 echo "[smoke-replay] starting LAPA-Depth server on port $PORT"
+echo "[smoke-replay] image root: $IMAGE_ROOT"
+echo "[smoke-replay] output json: $OUTPUT_JSON"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" "$MODEL_PY" "${server_args[@]}" &
 SERVER_PID=$!
 

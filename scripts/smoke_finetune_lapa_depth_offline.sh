@@ -7,7 +7,7 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}"
 export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_megacore_fusion_allow_ags=false --xla_enable_async_collective_permute=true --xla_tpu_enable_ag_backward_pipelining=true --xla_tpu_enable_data_parallel_all_reduce_opt=true --xla_tpu_data_parallel_opt_different_sized_ops=true --xla_tpu_enable_async_collective_fusion=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_overlap_compute_collective_tc=true --xla_enable_async_all_gather=true}"
 
-: "${LAPA_ROOT:?Set LAPA_ROOT to the directory containing lapa_checkpoints and data.}"
+: "${LAPA_ROOT:?Set LAPA_ROOT to the project directory containing lapa_checkpoints and datasets/libero_data.}"
 : "${DATASET_JSONL:?Set DATASET_JSONL to the LAPA fine-tuning JSONL.}"
 : "${DEPTH_DATA_DIR:?Set DEPTH_DATA_DIR to the directory containing depth .pt/.pth parts.}"
 
@@ -17,7 +17,7 @@ JSON_ID_SOURCE="${JSON_ID_SOURCE:-auto}"
 DEPTH_ID_KEY="${DEPTH_ID_KEY:-auto}"
 DEPTH_FEATURE_KEY="${DEPTH_FEATURE_KEY:-auto}"
 DEPTH_FEATURE_DIM="${DEPTH_FEATURE_DIM:-1024}"
-IMAGE_ROOT="${IMAGE_ROOT:-$LAPA_ROOT/data/}"
+IMAGE_ROOT="${IMAGE_ROOT:-$LAPA_ROOT/datasets/libero_data/}"
 TOKENIZER_PATH="${TOKENIZER_PATH:-$LAPA_ROOT/lapa_checkpoints/tokenizer.model}"
 VQGAN_CKPT="${VQGAN_CKPT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
 LAPA_PARAMS="${LAPA_PARAMS:-$LAPA_ROOT/lapa_checkpoints/params}"
@@ -30,6 +30,7 @@ BATCH_SIZE="${BATCH_SIZE:-8}"
 SEQ_LENGTH="${SEQ_LENGTH:-384}"
 MESH_DIM="${MESH_DIM:-!-1,4,1,1}"
 WANDB_ONLINE="${WANDB_ONLINE:-False}"
+WANDB_DIR="${WANDB_DIR:-$OUTPUT_DIR/$EXPERIMENT_ID/wandb}"
 
 args=(
   -u -m latent_pretraining.train
@@ -86,7 +87,7 @@ args=(
   --logger.experiment_id="$EXPERIMENT_ID"
   --logger.experiment_note="$EXPERIMENT_NOTE"
   --logger.output_dir="$OUTPUT_DIR"
-  --logger.wandb_dir="$HOME/experiment_output/$PROJECT_ID"
+  --logger.wandb_dir="$WANDB_DIR"
 )
 
 if [[ -n "$DEPTH_MANIFEST" ]]; then
