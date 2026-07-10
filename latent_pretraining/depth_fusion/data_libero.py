@@ -65,7 +65,7 @@ def _load_manifest_parts(manifest_path: Path, data_dir: Path) -> List[Path]:
 def discover_part_files(data_dir: Path, manifest_path: Optional[Path] = None) -> List[Path]:
     if manifest_path is not None:
         return _load_manifest_parts(manifest_path, data_dir)
-    return sorted(data_dir.glob("*_part*.pt"))
+    return sorted(list(data_dir.glob("*_part*.pt")) + list(data_dir.glob("*_part*.pth")))
 
 
 def _first_present_key(shard: Dict[str, object], candidates: Sequence[str]) -> Optional[str]:

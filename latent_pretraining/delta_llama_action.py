@@ -443,6 +443,14 @@ class FlaxDeltaActionLaMAForCausalLMModule(nn.Module):
             kernel_init=jax.nn.initializers.normal(stddev=self.config.initializer_range),
             precision=self.precision,
         )
+        self.depth_action_proj = nn.Dense(
+            self.config.hidden_size,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+            use_bias=False,
+            kernel_init=jax.nn.initializers.normal(stddev=self.config.initializer_range),
+            precision=self.precision,
+        )
 
 
     def __call__(
@@ -451,6 +459,7 @@ class FlaxDeltaActionLaMAForCausalLMModule(nn.Module):
         vision_masks,
         delta_masks,
         action_masks,
+        depth_features=None,
         attention_mask=None,
         segment_ids=None,
         position_ids=None,
@@ -507,11 +516,16 @@ class FlaxDeltaActionLaMAForCausalLMModule(nn.Module):
         else:
             delta_logits = self.delta_head(hidden_states)
         
+        action_hidden_states = hidden_states
+        if depth_features is not None:
+            depth_context = self.depth_action_proj(depth_features).astype(hidden_states.dtype)
+            action_hidden_states = hidden_states + depth_context[:, None, :]
+
         if self.config.tie_vision_embeddings:
             shared_kernel = self.transformer.variables["params"]["ate"]["embedding"].T
-            action_logits = self.action_head.apply({"params": {"kernel": shared_kernel}}, hidden_states)
+            action_logits = self.action_head.apply({"params": {"kernel": shared_kernel}}, action_hidden_states)
         else:
-            action_logits = self.action_head(hidden_states)
+            action_logits = self.action_head(action_hidden_states)
             # action_logits = self.action_head2(hidden_states)
 
         if self.config.sample_mode == 'all':

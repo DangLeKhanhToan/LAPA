@@ -13,7 +13,7 @@ export PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}"
 # Required when depth shards do not contain z_rgb_feature_input. Model4 inspect
 # output showed that RGB features must be supplied separately.
 : "${RGB_DATA_DIR:?Set RGB_DATA_DIR to the LAPA RGB feature shard directory.}"
-: "${RGB_MANIFEST:?Set RGB_MANIFEST to the LAPA RGB feature manifest JSON.}"
+RGB_MANIFEST="${RGB_MANIFEST:-}"
 
 # Required because the inspected Stage-2.5 shards do not contain action labels.
 # Use either ACTION_JSONL or ACTION_DATA_DIR/ACTION_MANIFEST.
@@ -29,6 +29,16 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-$PROJECT_DIR/outputs/depth_fusion_stage3}"
 SMOKE_OUTPUT_DIR="${SMOKE_OUTPUT_DIR:-$OUTPUT_ROOT/smoke}"
 FULL_OUTPUT_DIR="${FULL_OUTPUT_DIR:-$OUTPUT_ROOT/full}"
 
+DEPTH_MANIFEST_ARGS=(--manifest "$DEPTH_MANIFEST")
+RGB_MANIFEST_ARGS=()
+if [ -n "$RGB_MANIFEST" ]; then
+  RGB_MANIFEST_ARGS=(--manifest "$RGB_MANIFEST")
+fi
+RGB_TRAIN_ARGS=(--rgb_data_dir "$RGB_DATA_DIR")
+if [ -n "$RGB_MANIFEST" ]; then
+  RGB_TRAIN_ARGS+=(--rgb_manifest "$RGB_MANIFEST")
+fi
+
 ACTION_ARGS=()
 if [ -n "$ACTION_JSONL" ]; then
   ACTION_ARGS+=(--action_jsonl "$ACTION_JSONL")
@@ -43,20 +53,19 @@ fi
 echo "[1/5] Inspect depth shard schema"
 python3 -m latent_pretraining.depth_fusion.inspect_pt_shard \
   --data_dir "$DEPTH_DATA_DIR" \
-  --manifest "$DEPTH_MANIFEST"
+  "${DEPTH_MANIFEST_ARGS[@]}"
 
 echo "[2/5] Inspect RGB shard schema"
 python3 -m latent_pretraining.depth_fusion.inspect_pt_shard \
   --data_dir "$RGB_DATA_DIR" \
-  --manifest "$RGB_MANIFEST" \
+  "${RGB_MANIFEST_ARGS[@]}" \
   --action_key __skip_action_for_inspection__
 
 echo "[3/5] Smoke fine-tune one epoch / few batches"
 python3 -u -m latent_pretraining.depth_fusion.train_depth_fusion \
   --data_dir "$DEPTH_DATA_DIR" \
   --manifest "$DEPTH_MANIFEST" \
-  --rgb_data_dir "$RGB_DATA_DIR" \
-  --rgb_manifest "$RGB_MANIFEST" \
+  "${RGB_TRAIN_ARGS[@]}" \
   "${ACTION_ARGS[@]}" \
   --output_dir "$SMOKE_OUTPUT_DIR" \
   --rgb_feature_key auto \
@@ -78,8 +87,7 @@ python3 -m latent_pretraining.depth_fusion.predict_depth_fusion \
   --checkpoint "$SMOKE_OUTPUT_DIR/best.pt" \
   --data_dir "$DEPTH_DATA_DIR" \
   --manifest "$DEPTH_MANIFEST" \
-  --rgb_data_dir "$RGB_DATA_DIR" \
-  --rgb_manifest "$RGB_MANIFEST" \
+  "${RGB_TRAIN_ARGS[@]}" \
   --output_jsonl "$SMOKE_OUTPUT_DIR/predictions.jsonl" \
   --max_samples "${PREDICT_MAX_SAMPLES:-32}"
 
@@ -87,8 +95,7 @@ echo "[5/5] Full offline Stage-3 depth-fusion fine-tune"
 python3 -u -m latent_pretraining.depth_fusion.train_depth_fusion \
   --data_dir "$DEPTH_DATA_DIR" \
   --manifest "$DEPTH_MANIFEST" \
-  --rgb_data_dir "$RGB_DATA_DIR" \
-  --rgb_manifest "$RGB_MANIFEST" \
+  "${RGB_TRAIN_ARGS[@]}" \
   "${ACTION_ARGS[@]}" \
   --output_dir "$FULL_OUTPUT_DIR" \
   --rgb_feature_key auto \

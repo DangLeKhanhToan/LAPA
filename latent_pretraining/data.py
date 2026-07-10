@@ -3,6 +3,7 @@ import random
 from functools import partial
 import json
 from multiprocessing import Pool
+from pathlib import Path
 
 from tux import open_file
 from ml_collections import ConfigDict
@@ -620,6 +621,7 @@ class DeltaVisionActionProcessor(object):
         config.img_aug = False
         config.vqgan_checkpoint_path = ''
         config.image_absolute_path = ''
+        config.sample_id_key = 'id'
         if updates is not None:
             config.update(ConfigDict(updates).copy_and_resolve_references())
         return config
@@ -646,6 +648,7 @@ class DeltaVisionActionProcessor(object):
         else:
             aux = tuple()
         rand_state = random.Random(aux[-1]) # makes augmentations deterministic by line number
+        sample_id = example.get(self.config.sample_id_key)
         token_buffer = []
         loss_mask_buffer = []
         vision_mask = []
@@ -778,7 +781,7 @@ class DeltaVisionActionProcessor(object):
             action_mask.append(False)
         assert len(token_buffer) == len(loss_mask_buffer) == len(vision_mask) == len(delta_mask) == len(action_mask), (len(token_buffer), len(loss_mask_buffer), len(vision_mask), len(delta_mask), len(action_mask))
         keep = True
-        return token_buffer, loss_mask_buffer, vision_mask, delta_mask, action_mask, action_list, keep, *aux
+        return token_buffer, loss_mask_buffer, vision_mask, delta_mask, action_mask, action_list, sample_id, keep, *aux
     
 
 class HuggingfaceDataset(object):
@@ -2124,6 +2127,12 @@ class JsonDeltaActionDataset(object):
         config.valid = False
         config.mode = 'pad'
         config.n_tokens_per_action = 7
+        config.depth_feature_data_dir = ''
+        config.depth_feature_manifest = ''
+        config.depth_feature_key = 'auto'
+        config.depth_feature_id_key = 'auto'
+        config.depth_feature_dim = 1024
+        config.depth_feature_preload = False
 
         if updates is not None:
             config.update(ConfigDict(updates).copy_and_resolve_references())
@@ -2141,6 +2150,60 @@ class JsonDeltaActionDataset(object):
         self.valid = self.config.valid
         self._total_tokens = 0
         self._data = self._load_and_shuffle_data()
+        self._depth_index = None
+        if self.config.depth_feature_data_dir:
+            import torch
+
+            from latent_pretraining.depth_fusion.data_libero import (
+                ShardFieldIndex,
+                discover_part_files,
+                load_manifest,
+                _first_present_key,
+                _manifest_key,
+                DEPTH_FEATURE_CANDIDATES,
+            )
+
+            depth_manifest_path = (
+                Path(self.config.depth_feature_manifest)
+                if self.config.depth_feature_manifest
+                else None
+            )
+            depth_manifest = load_manifest(depth_manifest_path)
+            depth_part_files = discover_part_files(
+                Path(self.config.depth_feature_data_dir),
+                depth_manifest_path,
+            )
+            if not depth_part_files:
+                raise FileNotFoundError(
+                    f"No depth .pt/.pth part files found under {self.config.depth_feature_data_dir}"
+                )
+            first_shard = torch.load(depth_part_files[0], map_location="cpu")
+            depth_feature_key = self.config.depth_feature_key
+            if depth_feature_key == "auto":
+                depth_feature_key = (
+                    _manifest_key(depth_manifest, ("feature_key", "feature_key_pred", "depth_feature_key"))
+                    or _first_present_key(first_shard, DEPTH_FEATURE_CANDIDATES)
+                )
+            self._depth_index = ShardFieldIndex(
+                depth_part_files,
+                value_key=depth_feature_key,
+                id_key=self.config.depth_feature_id_key,
+                manifest=depth_manifest,
+                preload=self.config.depth_feature_preload,
+                label="offline depth feature",
+            )
+            print(
+                json.dumps(
+                    {
+                        "offline_depth_features": {
+                            "samples": len(self._depth_index),
+                            "feature_key": depth_feature_key,
+                            "id_key": self._depth_index.id_key,
+                            "data_dir": self.config.depth_feature_data_dir,
+                        }
+                    }
+                )
+            )
     
     def _load_and_shuffle_data(self):
         data = []
@@ -2229,12 +2292,14 @@ class JsonDeltaActionDataset(object):
         step_times = []
         start_time = time.time()
         start_tokens = self._total_tokens
-        for tokens, loss_masks, vision_masks, delta_masks, action_masks, action_list, keep, loc, index in self.parallel_example_iterator():
+        for tokens, loss_masks, vision_masks, delta_masks, action_masks, action_list, sample_id, keep, loc, index in self.parallel_example_iterator():
             if not keep:
+                continue
+            if self._depth_index is not None and sample_id not in self._depth_index:
                 continue
             self._file_loc = loc
             self._index = index
-            buffer.append((tokens, loss_masks, vision_masks, delta_masks, action_masks, action_list))
+            buffer.append((tokens, loss_masks, vision_masks, delta_masks, action_masks, action_list, sample_id))
             while len(buffer) >= local_batch_size:
                 self._total_tokens += chunk_size
                 step_times.append(time.time() - last_time)
@@ -2319,8 +2384,13 @@ class JsonDeltaActionDataset(object):
                         dtype=np.float32
                     ),
                 }
+                if self._depth_index is not None:
+                    batch['depth_features'] = np.zeros(
+                        (local_batch_size, self.config.depth_feature_dim),
+                        dtype=np.float32
+                    )
                 for i in range(local_batch_size):
-                    tokens, loss_masks, vision_masks, delta_masks, action_masks, action_list = buffer[i]
+                    tokens, loss_masks, vision_masks, delta_masks, action_masks, action_list, sample_id = buffer[i]
                     if len(tokens) > self.config.seq_length:
                         tokens = tokens[:self.config.seq_length + 1]
                         loss_masks = loss_masks[1:self.config.seq_length + 1]
@@ -2342,6 +2412,11 @@ class JsonDeltaActionDataset(object):
                     batch['target_action_masks'][i, :len(target_action_masks)] = target_action_masks
                     batch['loss_masks'][i, :len(loss_masks)] = loss_masks
                     batch['action_list'][i, :len(action_list)] = action_list
+                    if self._depth_index is not None:
+                        batch['depth_features'][i] = np.asarray(
+                            self._depth_index.get(sample_id),
+                            dtype=np.float32,
+                        )
 
 
 
@@ -2351,7 +2426,14 @@ class JsonDeltaActionDataset(object):
                     sp_nodes_rank = jax.process_index() % sp_nodes_size
                     assert self.config.seq_length % sp_nodes_size == 0, (self.config.seq_len, sp_nodes_size)
                     seq_chunk_size = self.config.seq_length // sp_nodes_size
-                    batch = {k: v[:, sp_nodes_rank*seq_chunk_size:(sp_nodes_rank+1)*seq_chunk_size] for k, v in batch.items()}
+                    batch = {
+                        k: (
+                            v[:, sp_nodes_rank*seq_chunk_size:(sp_nodes_rank+1)*seq_chunk_size]
+                            if len(v.shape) == 2 and v.shape[1] == self.config.seq_length
+                            else v
+                        )
+                        for k, v in batch.items()
+                    }
                     batch = host_local_array_to_global_array(batch, self._node_info['mesh'], PS(('dp', 'fsdp'), 'sp'))
                 yield batch, metrics
                 buffer = buffer[local_batch_size:]
@@ -2374,7 +2456,9 @@ class JsonDeltaActionDataset(object):
         step_times = []
         start_time = time.time()
         start_tokens = self._total_tokens
-        for tokens, loss_masks, vision_masks, delta_masks, action_masks, action_list, keep, loc, index in self.parallel_example_iterator():
+        for tokens, loss_masks, vision_masks, delta_masks, action_masks, action_list, sample_id, keep, loc, index in self.parallel_example_iterator():
+            if self._depth_index is not None:
+                raise ValueError("Offline depth features are only supported with json_delta_action_dataset.mode='pad'.")
             if not keep:
                 continue
             self._file_loc = loc

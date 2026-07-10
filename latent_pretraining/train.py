@@ -182,6 +182,9 @@ def main(argv):
     model = llama_cls(
         llama_config, dtype=get_float_dtype_by_name(FLAGS.dtype)
     )
+    use_depth_features = bool(
+        getattr(FLAGS.train_dataset.json_delta_action_dataset, "depth_feature_data_dir", "")
+    )
 
     optimizer, optimizer_info = OptimizerFactory.get_optimizer(
         FLAGS.optimizer,
@@ -220,20 +223,32 @@ def main(argv):
                 rngs=rng_generator(llama_config.rng_keys()),
             )
         elif FLAGS.modality == 'vision,action':
+            depth_features = (
+                jnp.zeros((batch, FLAGS.train_dataset.json_delta_action_dataset.depth_feature_dim), dtype=jnp.float32)
+                if use_depth_features
+                else None
+            )
             params = model.init(
                 input_ids=jnp.zeros((batch, seq_length), dtype=jnp.int32),
                 vision_masks=jnp.zeros((batch, seq_length), dtype=bool),
                 action_masks=jnp.zeros((batch, seq_length), dtype=bool),
+                depth_features=depth_features,
                 position_ids=jnp.zeros((batch, seq_length), dtype=jnp.int32),
                 attention_mask=jnp.ones((batch, seq_length), dtype=jnp.int32),
                 rngs=rng_generator(llama_config.rng_keys()),
             )
         elif FLAGS.modality == 'vision,action,delta':
+            depth_features = (
+                jnp.zeros((batch, FLAGS.train_dataset.json_delta_action_dataset.depth_feature_dim), dtype=jnp.float32)
+                if use_depth_features
+                else None
+            )
             params = model.init(
                 input_ids=jnp.zeros((batch, seq_length), dtype=jnp.int32),
                 vision_masks=jnp.zeros((batch, seq_length), dtype=bool),
                 delta_masks=jnp.zeros((batch, seq_length), dtype=bool),
                 action_masks=jnp.zeros((batch, seq_length), dtype=bool),
+                depth_features=depth_features,
                 position_ids=jnp.zeros((batch, seq_length), dtype=jnp.int32),
                 attention_mask=jnp.ones((batch, seq_length), dtype=jnp.int32),
                 rngs=rng_generator(llama_config.rng_keys()),
@@ -326,6 +341,7 @@ def main(argv):
                     batch['input_tokens'], 
                     batch['input_vision_masks'],
                     batch['input_action_masks'],
+                    depth_features=batch.get('depth_features'),
                     deterministic=False,
                     rngs=rng_generator(llama_config.rng_keys()),
                 ).logits
@@ -360,6 +376,7 @@ def main(argv):
                     batch['input_vision_masks'],
                     batch['input_delta_masks'],
                     batch['input_action_masks'],
+                    depth_features=batch.get('depth_features'),
                     deterministic=False,
                     rngs=rng_generator(llama_config.rng_keys()),
                 ).logits
@@ -499,6 +516,7 @@ def main(argv):
                 batch['input_tokens'], 
                 batch['input_vision_masks'],
                 batch['input_action_masks'],
+                depth_features=batch.get('depth_features'),
                 deterministic=True,
                 rngs=rng_generator(llama_config.rng_keys()),
             ).logits
@@ -540,6 +558,7 @@ def main(argv):
                 batch['input_vision_masks'],
                 batch['input_delta_masks'],
                 batch['input_action_masks'],
+                depth_features=batch.get('depth_features'),
                 deterministic=True,
                 rngs=rng_generator(llama_config.rng_keys()),
             ).logits
@@ -612,6 +631,7 @@ def main(argv):
                 batch['input_tokens'], 
                 batch['input_vision_masks'],
                 batch['input_action_masks'],
+                depth_features=batch.get('depth_features'),
                 deterministic=True,
                 rngs=rng_generator(llama_config.rng_keys()),
             ).logits
@@ -641,6 +661,7 @@ def main(argv):
                 batch['input_vision_masks'],
                 batch['input_delta_masks'],
                 batch['input_action_masks'],
+                depth_features=batch.get('depth_features'),
                 deterministic=True,
                 rngs=rng_generator(llama_config.rng_keys()),
             ).logits

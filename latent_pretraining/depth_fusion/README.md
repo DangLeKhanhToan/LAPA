@@ -45,7 +45,6 @@ PYTHONPATH="$PWD" python -m latent_pretraining.depth_fusion.train_depth_fusion \
   --data_dir /path/to/z_depth_train_shard0 \
   --manifest /path/to/z_depth_train_shard0/z_depth_train_shard0_model4_manifest.json \
   --rgb_data_dir /path/to/z_rgb_train_shard0 \
-  --rgb_manifest /path/to/z_rgb_train_shard0/z_rgb_train_shard0_manifest.json \
   --action_jsonl /path/to/libero_actions.jsonl \
   --output_dir outputs/depth_fusion_smoke \
   --epochs 1 \
@@ -60,7 +59,6 @@ The convenience smoke script wraps the same command:
 DEPTH_DATA_DIR=/path/to/z_depth_train_shard0 \
 DEPTH_MANIFEST=/path/to/z_depth_train_shard0/z_depth_train_shard0_model4_manifest.json \
 RGB_DATA_DIR=/path/to/z_rgb_train_shard0 \
-RGB_MANIFEST=/path/to/z_rgb_train_shard0/z_rgb_train_shard0_manifest.json \
 ACTION_JSONL=/path/to/libero_actions.jsonl \
 ./scripts/smoke_finetune_depth_fusion_libero.sh
 ```
@@ -73,7 +71,6 @@ PYTHONPATH="$PWD" python -m latent_pretraining.depth_fusion.predict_depth_fusion
   --data_dir /path/to/z_depth_train_shard0 \
   --manifest /path/to/z_depth_train_shard0/z_depth_train_shard0_model4_manifest.json \
   --rgb_data_dir /path/to/z_rgb_train_shard0 \
-  --rgb_manifest /path/to/z_rgb_train_shard0/z_rgb_train_shard0_manifest.json \
   --output_jsonl outputs/depth_fusion_smoke/predictions.jsonl \
   --max_samples 32
 ```
@@ -84,10 +81,12 @@ For a single server-side pipeline script, set the required paths and run:
 DEPTH_DATA_DIR=/path/to/stage25_model4/z_depth_train_shard0 \
 DEPTH_MANIFEST=/path/to/stage25_model4/z_depth_train_shard0/z_depth_train_shard0_model4_manifest.json \
 RGB_DATA_DIR=/path/to/z_rgb_train_shard0 \
-RGB_MANIFEST=/path/to/z_rgb_train_shard0/z_rgb_train_shard0_manifest.json \
 ACTION_JSONL=/path/to/libero_actions.jsonl \
 ./scripts/run_depth_fusion_stage3_pipeline.sh
 ```
+
+`RGB_MANIFEST` is optional. If it is absent, the loader discovers `*_part*.pt`
+files directly from `RGB_DATA_DIR`.
 
 This runs inspection, smoke fine-tuning, smoke checkpoint prediction, and full
 offline depth-fusion fine-tuning in order.
