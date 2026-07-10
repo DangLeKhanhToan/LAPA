@@ -7,36 +7,69 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}"
 export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_megacore_fusion_allow_ags=false --xla_enable_async_collective_permute=true --xla_tpu_enable_ag_backward_pipelining=true --xla_tpu_enable_data_parallel_all_reduce_opt=true --xla_tpu_data_parallel_opt_different_sized_ops=true --xla_tpu_enable_async_collective_fusion=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_overlap_compute_collective_tc=true --xla_enable_async_all_gather=true}"
 
-: "${LAPA_ROOT:?Set LAPA_ROOT to the project directory containing lapa_checkpoints and datasets/libero_data.}"
-: "${SMOKE_JSONL:?Set SMOKE_JSONL to the one-task JSONL from scripts/make_smoke_one_task_jsonl.sh.}"
-: "${DEPTH_DATA_DIR:?Set DEPTH_DATA_DIR to the directory containing depth .pt/.pth parts.}"
-
+LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
 SUITE="${SUITE:-libero_90}"
 DATA_ROOT="${DATA_ROOT:-$LAPA_ROOT/datasets/lapa_libero_v2}"
-ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$DATA_ROOT/action_bins_${SUITE}.csv}"
-DEPTH_MANIFEST="${DEPTH_MANIFEST:-}"
-JSON_ID_KEY="${JSON_ID_KEY:-id}"
-JSON_ID_SOURCE="${JSON_ID_SOURCE:-auto}"
-DEPTH_ID_KEY="${DEPTH_ID_KEY:-auto}"
-DEPTH_FEATURE_KEY="${DEPTH_FEATURE_KEY:-auto}"
-DEPTH_FEATURE_DIM="${DEPTH_FEATURE_DIM:-1024}"
+TRAIN_JSONL="${TRAIN_JSONL:-$DATA_ROOT/${SUITE}.jsonl}"
 IMAGE_ROOT="${IMAGE_ROOT:-$DATA_ROOT/}"
+ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$DATA_ROOT/action_bins_${SUITE}.csv}"
+DEPTH_BASE_DIR="${DEPTH_BASE_DIR:-$LAPA_ROOT/datasets/features_depth_branch/stage25_libero_features_model4/${SUITE}/stage25_model4}"
+DEPTH_DATA_DIR="${DEPTH_DATA_DIR:-}"
+DEPTH_MANIFEST="${DEPTH_MANIFEST:-}"
+
+if [[ -z "$DEPTH_DATA_DIR" ]]; then
+  if compgen -G "$DEPTH_BASE_DIR/*_part*.pt" >/dev/null || compgen -G "$DEPTH_BASE_DIR/*_part*.pth" >/dev/null; then
+    DEPTH_DATA_DIR="$DEPTH_BASE_DIR"
+  elif [[ -d "$DEPTH_BASE_DIR/z_depth_train_shard0" ]]; then
+    DEPTH_DATA_DIR="$DEPTH_BASE_DIR/z_depth_train_shard0"
+  else
+    DEPTH_DATA_DIR="$DEPTH_BASE_DIR"
+  fi
+fi
+
+if [[ -z "$DEPTH_MANIFEST" ]]; then
+  for candidate in \
+    "$DEPTH_DATA_DIR/z_depth_train_model4_manifest.json" \
+    "$DEPTH_DATA_DIR/z_depth_train_shard0_model4_manifest.json" \
+    "$DEPTH_DATA_DIR"/*_manifest.json; do
+    if [[ -f "$candidate" ]]; then
+      DEPTH_MANIFEST="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ ! -f "$TRAIN_JSONL" ]]; then
+  echo "ERROR: train JSONL not found: $TRAIN_JSONL" >&2
+  exit 1
+fi
+if [[ ! -f "$ACTION_SCALE_FILE" ]]; then
+  echo "ERROR: action bins CSV not found: $ACTION_SCALE_FILE" >&2
+  exit 1
+fi
+if [[ ! -d "$DEPTH_DATA_DIR" ]]; then
+  echo "ERROR: depth feature directory not found: $DEPTH_DATA_DIR" >&2
+  exit 1
+fi
+
+ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')}"
 TOKENIZER_PATH="${TOKENIZER_PATH:-$LAPA_ROOT/lapa_checkpoints/tokenizer.model}"
 VQGAN_CKPT="${VQGAN_CKPT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
 LAPA_PARAMS="${LAPA_PARAMS:-$LAPA_ROOT/lapa_checkpoints/lapa_7b_sth/params}"
 OUTPUT_DIR="${OUTPUT_DIR:-$LAPA_ROOT/outputs}"
 PROJECT_ID="${PROJECT_ID:-lapa_depth}"
-EXPERIMENT_ID="${EXPERIMENT_ID:-smoke_overfit_lapa_depth_one_task}"
-EXPERIMENT_NOTE="${EXPERIMENT_NOTE:-smoke_overfit_lapa_depth_one_task}"
-TOTAL_STEPS="${TOTAL_STEPS:-500}"
-BATCH_SIZE="${BATCH_SIZE:-16}"
+EXPERIMENT_ID="${EXPERIMENT_ID:-lapa_depth_stage3_${SUITE}}"
+EXPERIMENT_NOTE="${EXPERIMENT_NOTE:-stage3_${SUITE}_depth_offline}"
+TOTAL_STEPS="${TOTAL_STEPS:-20000}"
+BATCH_SIZE="${BATCH_SIZE:-128}"
 SEQ_LENGTH="${SEQ_LENGTH:-384}"
 MESH_DIM="${MESH_DIM:-!-1,4,1,1}"
-if [[ -f "$ACTION_SCALE_FILE" ]]; then
-  ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')}"
-else
-  ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-256}"
-fi
+LR="${LR:-2e-5}"
+DEPTH_ID_KEY="${DEPTH_ID_KEY:-auto}"
+DEPTH_FEATURE_KEY="${DEPTH_FEATURE_KEY:-auto}"
+DEPTH_FEATURE_DIM="${DEPTH_FEATURE_DIM:-1024}"
+JSON_ID_KEY="${JSON_ID_KEY:-id}"
+JSON_ID_SOURCE="${JSON_ID_SOURCE:-auto}"
 WANDB_ONLINE="${WANDB_ONLINE:-False}"
 WANDB_DIR="${WANDB_DIR:-$OUTPUT_DIR/$EXPERIMENT_ID/wandb}"
 
@@ -60,8 +93,8 @@ args=(
   --llama.delta_vocab_size=8
   --optimizer.accumulate_gradient_steps=1
   --optimizer.adamw_optimizer.weight_decay=0
-  --optimizer.adamw_optimizer.lr=2e-5
-  --optimizer.adamw_optimizer.end_lr=2e-5
+  --optimizer.adamw_optimizer.lr="$LR"
+  --optimizer.adamw_optimizer.end_lr="$LR"
   --optimizer.adamw_optimizer.lr_warmup_steps=0
   --optimizer.adamw_optimizer.lr_decay_steps="$TOTAL_STEPS"
   --freeze_vision_params=True
@@ -77,7 +110,7 @@ args=(
   --train_dataset.delta_vision_action_processor.image_absolute_path="$IMAGE_ROOT"
   --train_dataset.delta_vision_action_processor.max_n_frames=1
   --train_dataset.json_delta_action_dataset.mode="pad"
-  --train_dataset.json_delta_action_dataset.path="$SMOKE_JSONL"
+  --train_dataset.json_delta_action_dataset.path="$TRAIN_JSONL"
   --train_dataset.json_delta_action_dataset.seq_length="$SEQ_LENGTH"
   --train_dataset.json_delta_action_dataset.batch_size="$BATCH_SIZE"
   --train_dataset.json_delta_action_dataset.tokenizer_processes=1
@@ -103,12 +136,15 @@ if [[ -n "$DEPTH_MANIFEST" ]]; then
   args+=(--train_dataset.json_delta_action_dataset.depth_feature_manifest="$DEPTH_MANIFEST")
 fi
 
-echo "[smoke-train] image root: $IMAGE_ROOT"
-echo "[smoke-train] action bins: ${ACTION_SCALE_FILE:-<none>}"
-echo "[smoke-train] action_vocab_size: $ACTION_VOCAB_SIZE"
-echo "[smoke-train] output dir: $OUTPUT_DIR/$EXPERIMENT_ID"
-echo "[smoke-train] wandb dir: $WANDB_DIR"
+echo "[train-depth-suite] suite: $SUITE"
+echo "[train-depth-suite] train jsonl: $TRAIN_JSONL"
+echo "[train-depth-suite] image root: $IMAGE_ROOT"
+echo "[train-depth-suite] action bins: $ACTION_SCALE_FILE"
+echo "[train-depth-suite] action_vocab_size: $ACTION_VOCAB_SIZE"
+echo "[train-depth-suite] depth dir: $DEPTH_DATA_DIR"
+echo "[train-depth-suite] depth manifest: ${DEPTH_MANIFEST:-<none>}"
+echo "[train-depth-suite] output: $OUTPUT_DIR/$EXPERIMENT_ID"
 
 python3 "${args[@]}"
 
-echo "[smoke-train] checkpoint: $OUTPUT_DIR/$EXPERIMENT_ID/streaming_params"
+echo "[train-depth-suite] checkpoint: $OUTPUT_DIR/$EXPERIMENT_ID/streaming_params"

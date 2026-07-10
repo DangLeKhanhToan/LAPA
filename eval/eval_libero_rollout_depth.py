@@ -65,7 +65,7 @@ def query_action(args, image_model, instruction, tmp_path, step_index):
             data = resp.json()
             action = np.asarray(data, dtype=np.float32)
             if action.shape != (7,):
-                raise ValueError(f"bad action from server: {data!r}")
+                raise ValueError(f"bad action from server for depth_id={depth_id}: {data!r}")
             if args.binarize_gripper:
                 action[6] = 1.0 if action[6] > 0 else -1.0
             return action

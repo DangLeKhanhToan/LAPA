@@ -72,8 +72,22 @@ def main():
                 "return_debug": True,
             }
             pred = post_with_retries(args.server_url, payload, args.connect_retries, args.retry_wait)
-            pred_action = pred["action"] if isinstance(pred, dict) else pred
-            pred_tokens = pred.get("action_tokens") if isinstance(pred, dict) else None
+            if not isinstance(pred, dict) or "action" not in pred:
+                rows.append(
+                    {
+                        "line": line_number,
+                        "image": item["image"],
+                        "depth_id": depth_id,
+                        "target_tokens": item.get("action"),
+                        "target_raw_actions": item.get("raw_actions"),
+                        "server_response": pred,
+                        "error": "server did not return a debug action payload",
+                    }
+                )
+                continue
+
+            pred_action = pred["action"]
+            pred_tokens = pred.get("action_tokens")
             row = {
                 "line": line_number,
                 "image": item["image"],

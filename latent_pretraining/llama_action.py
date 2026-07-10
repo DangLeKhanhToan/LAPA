@@ -153,15 +153,24 @@ class FlaxVideoLLaMAPreTrainedModel(FlaxPreTrainedModel):
 
     def init_cache(self, batch_size, max_length):
         # init input variables to retrieve cache
-        input_ids = jnp.ones((batch_size, max_length))
-        attention_mask = jnp.ones_like(input_ids)
-        segment_ids = jnp.zeros_like(input_ids)
-        position_ids = jnp.broadcast_to(jnp.arange(jnp.atleast_2d(input_ids).shape[-1]), input_ids.shape)
+        input_ids = jnp.ones((batch_size, max_length), dtype="i4")
+        attention_mask = jnp.ones_like(input_ids, dtype="i4")
+        segment_ids = jnp.zeros_like(input_ids, dtype="i4")
+        position_ids = jnp.broadcast_to(jnp.arange(max_length, dtype="i4")[None, :], input_ids.shape)
         vision_masks = jnp.ones((batch_size, max_length), dtype=bool)
         action_masks = jnp.ones((batch_size, max_length), dtype=bool)
 
         init_variables = self.module.init(
-            jax.random.PRNGKey(0), input_ids, vision_masks, action_masks, attention_mask, segment_ids, position_ids, return_dict=False, init_cache=True
+            jax.random.PRNGKey(0),
+            input_ids=input_ids,
+            vision_masks=vision_masks,
+            action_masks=action_masks,
+            depth_features=None,
+            attention_mask=attention_mask,
+            segment_ids=segment_ids,
+            position_ids=position_ids,
+            return_dict=False,
+            init_cache=True,
         )
         return init_variables["cache"]
 
@@ -172,11 +181,21 @@ class FlaxVideoLLaMAPreTrainedModel(FlaxPreTrainedModel):
         vision_masks = jnp.ones(input_ids.shape, dtype=bool)
         action_masks = jnp.ones(input_ids.shape, dtype=bool)
         segment_ids = jnp.zeros_like(input_ids)
-        position_ids = jnp.broadcast_to(jnp.arange(jnp.atleast_2d(input_ids).shape[-1]), input_shape)
+        position_ids = jnp.broadcast_to(jnp.arange(jnp.atleast_2d(input_ids).shape[-1], dtype="i4"), input_shape)
         params_rng, dropout_rng = jax.random.split(rng)
         rngs = {"params": params_rng, "dropout": dropout_rng}
 
-        random_params = self.module.init(rngs, input_ids, vision_masks, action_masks, attention_mask, segment_ids, position_ids, return_dict=False)["params"]
+        random_params = self.module.init(
+            rngs,
+            input_ids=input_ids,
+            vision_masks=vision_masks,
+            action_masks=action_masks,
+            depth_features=None,
+            attention_mask=attention_mask,
+            segment_ids=segment_ids,
+            position_ids=position_ids,
+            return_dict=False,
+        )["params"]
 
         if params is not None:
             random_params = flatten_dict(unfreeze(random_params))
@@ -194,6 +213,7 @@ class FlaxVideoLLaMAPreTrainedModel(FlaxPreTrainedModel):
         input_ids,
         vision_masks,
         action_masks,
+        depth_features=None,
         attention_mask=None,
         segment_ids=None,
         position_ids=None,
@@ -217,13 +237,13 @@ class FlaxVideoLLaMAPreTrainedModel(FlaxPreTrainedModel):
             if past_key_values is not None:
                 raise ValueError("Make sure to provide `position_ids` when passing `past_key_values`.")
 
-            position_ids = jnp.broadcast_to(jnp.arange(sequence_length)[None, :], (batch_size, sequence_length))
+            position_ids = jnp.broadcast_to(jnp.arange(sequence_length, dtype="i4")[None, :], (batch_size, sequence_length))
 
         if attention_mask is None:
-            attention_mask = jnp.ones((batch_size, sequence_length))
+            attention_mask = jnp.ones((batch_size, sequence_length), dtype="i4")
         
         if segment_ids is None:
-            segment_ids = jnp.zeros((batch_size, sequence_length))
+            segment_ids = jnp.zeros((batch_size, sequence_length), dtype="i4")
 
         # Handle any PRNG if needed
         rngs = {}
@@ -241,17 +261,18 @@ class FlaxVideoLLaMAPreTrainedModel(FlaxPreTrainedModel):
 
         outputs = self.module.apply(
             inputs,
-            jnp.array(input_ids, dtype="i4"),
-            jnp.array(vision_masks, dtype="f4"),
-            jnp.array(action_masks, dtype="f4"),
-            jnp.array(attention_mask, dtype="i4"),
-            jnp.array(segment_ids, dtype="i4"),
-            jnp.array(position_ids, dtype="i4"),
-            not train,
-            False,
-            output_attentions,
-            output_hidden_states,
-            return_dict,
+            input_ids=jnp.array(input_ids, dtype="i4"),
+            vision_masks=jnp.array(vision_masks, dtype="f4"),
+            action_masks=jnp.array(action_masks, dtype="f4"),
+            depth_features=None if depth_features is None else jnp.array(depth_features, dtype="f4"),
+            attention_mask=jnp.array(attention_mask, dtype="i4"),
+            segment_ids=jnp.array(segment_ids, dtype="i4"),
+            position_ids=jnp.array(position_ids, dtype="i4"),
+            deterministic=not train,
+            init_cache=False,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
             rngs=rngs,
             mutable=mutable,
         )
@@ -525,10 +546,12 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
         # Thus we can create a single static attention_mask here, which is more efficient for compilation
         extended_attention_mask = jnp.ones((batch_size, max_length), dtype="i4")
         if attention_mask is not None:
+            attention_mask = jnp.asarray(attention_mask, dtype="i4")
             position_ids = attention_mask.cumsum(axis=-1) - 1
             extended_attention_mask = lax.dynamic_update_slice(extended_attention_mask, attention_mask, (0, 0))
         else:
             position_ids = jnp.broadcast_to(jnp.arange(seq_length, dtype="i4")[None, :], (batch_size, seq_length))
+        position_ids = jnp.asarray(position_ids, dtype="i4")
 
         return {
             "past_key_values": past_key_values,
@@ -542,8 +565,8 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
     def update_inputs_for_generation(self, model_outputs, model_kwargs):
         return {
             "past_key_values":  model_outputs.past_key_values,
-            "position_ids": model_kwargs["position_ids"][:, -1:] + 1,
-            "attention_mask": model_kwargs["attention_mask"],
+            "position_ids": jnp.asarray(model_kwargs["position_ids"][:, -1:] + 1, dtype="i4"),
+            "attention_mask": jnp.asarray(model_kwargs["attention_mask"], dtype="i4"),
             "vision_masks": model_kwargs["vision_masks"],
             "action_masks": model_kwargs["action_masks"],
             "depth_features": model_kwargs.get("depth_features"),
