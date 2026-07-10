@@ -514,7 +514,7 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
     module_class = FlaxActionLaMAForCausalLMModule
 
     def prepare_inputs_for_generation(
-        self, input_ids, max_length, attention_mask: Optional[jax.Array] = None, vision_masks = None, action_masks = None
+        self, input_ids, max_length, attention_mask: Optional[jax.Array] = None, vision_masks = None, action_masks = None, depth_features = None
     ):
         # initializing the cache
         batch_size, seq_length = input_ids.shape
@@ -536,6 +536,7 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
             "position_ids": position_ids,
             "vision_masks": vision_masks,
             "action_masks": action_masks,
+            "depth_features": depth_features,
         }
 
     def update_inputs_for_generation(self, model_outputs, model_kwargs):
@@ -545,6 +546,7 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
             "attention_mask": model_kwargs["attention_mask"],
             "vision_masks": model_kwargs["vision_masks"],
             "action_masks": model_kwargs["action_masks"],
+            "depth_features": model_kwargs.get("depth_features"),
         }
 
     def _sample_vision(

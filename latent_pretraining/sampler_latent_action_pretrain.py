@@ -186,8 +186,7 @@ class DeltaActionSampler:
 
 
             self.model.config.sample_mode='action'
-            action_output = self.model.generate_vision(
-                batch['input_ids'],
+            model_kwargs = dict(
                 vision_masks=batch['vision_masks'],
                 attention_mask=batch['attention_mask'],
                 delta_masks=batch['delta_masks'],
@@ -200,6 +199,12 @@ class DeltaActionSampler:
                     pad_token_id=self.tokenizer.pad_token_id,
                     eos_token_id=self.tokenizer.eos_token_id,
                 )
+            )
+            if 'depth_features' in batch:
+                model_kwargs['depth_features'] = batch['depth_features']
+            action_output = self.model.generate_vision(
+                batch['input_ids'],
+                **model_kwargs,
             ).sequences
             action_output= action_output[:,batch['input_ids'].shape[1]:]
             return action_output, rng_generator()
@@ -211,7 +216,7 @@ class DeltaActionSampler:
         )
 
     
-    def generate_video_pred(self, prompts, images, max_input_length):
+    def generate_video_pred(self, prompts, images, max_input_length, depth_features=None):
         
         sharded_rng = next_rng()
         inputs = self.prefix_tokenizer(
@@ -246,6 +251,8 @@ class DeltaActionSampler:
                 np.zeros(inputs_for_gen.input_ids.shape, dtype=bool),
             ], axis=1),
         )
+        if depth_features is not None:
+            batch['depth_features'] = np.asarray(depth_features, dtype=np.float32).reshape(len(prompts), -1)
         with self.mesh:
             action_output, sharded_rng = self._forward_generate(
                 self.params, sharded_rng, batch, 
@@ -258,6 +265,7 @@ class DeltaActionSampler:
     def __call__(self, prompts):
         batch = self.construct_input(prompts)
         text_prompt = f"<s> <s> You are a helpful assistant. USER: What action should the robot take to `{prompts[0]['question']}` ASSISTANT: <vision>"
-        action_output = self.generate_video_pred(prompts=[text_prompt], images=batch['input_ids'], max_input_length=128)
+        depth_features = prompts[0].get('depth_feature')
+        action_output = self.generate_video_pred(prompts=[text_prompt], images=batch['input_ids'], max_input_length=128, depth_features=depth_features)
         return action_output
         

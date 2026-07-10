@@ -88,6 +88,7 @@ FLAGS, FLAGS_DEF = define_flags_with_default(
     autoresume=False,
     delta_tokens=0,
     freeze=0,
+    freeze_vision_params=False,
     mse_loss=1,
 ) 
 
@@ -257,6 +258,13 @@ def main(argv):
             raise ValueError(f"Unsupported modality: {FLAGS.modality}")
         return TrainState.create(params=params, tx=optimizer, apply_fn=None)
 
+    def freeze_named_grads(grads, frozen_names):
+        flat_grads = flatten_dict(flax.core.frozen_dict.unfreeze(grads))
+        for path, value in flat_grads.items():
+            if any(name in path for name in frozen_names):
+                flat_grads[path] = jax.tree_util.tree_map(jnp.zeros_like, value)
+        return flax.core.frozen_dict.freeze(unflatten_dict(flat_grads))
+
     def train_step(train_state, rng, batch):
         rng_generator = JaxRNG(rng)
         batch = with_sharding_constraint(batch, PS(('dp', 'fsdp'), 'sp'))
@@ -417,6 +425,8 @@ def main(argv):
             return loss, metrics 
         grad_fn = jax.value_and_grad(loss_and_accuracy, has_aux=True)
         (loss, loss_metrics), grads = grad_fn(train_state.params)
+        if FLAGS.freeze_vision_params:
+            grads = freeze_named_grads(grads, ("vte", "vision_head"))
 
 
         train_state = train_state.apply_gradients(grads=grads)

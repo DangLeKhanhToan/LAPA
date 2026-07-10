@@ -21,6 +21,14 @@ from tux import JaxDistributedConfig
 from latent_pretraining.delta_llama import VideoLLaMAConfig
 from tux import JaxDistributedConfig, set_random_seed
 import csv
+from latent_pretraining.depth_fusion.data_libero import (
+    DEPTH_FEATURE_CANDIDATES,
+    ShardFieldIndex,
+    _first_present_key,
+    _manifest_key,
+    discover_part_files,
+    load_manifest,
+)
 
 class FLAGSClass:
     def __init__(self, flag_dict):
@@ -46,6 +54,10 @@ class LAPAServer:
             jax_distributed: dict,
             action_scale_file: str,
             img_aug: int,
+            depth_feature_data_dir: str = "",
+            depth_feature_manifest: str = "",
+            depth_feature_key: str = "auto",
+            depth_feature_id_key: str = "auto",
         ) -> Path:
         
         set_random_seed(seed)
@@ -79,6 +91,41 @@ class LAPAServer:
         else: 
             self.model = ActionSampler(flags)
         self.load_checkpoint= load_checkpoint
+        self.depth_index = None
+        if depth_feature_data_dir:
+            import torch
+
+            manifest_path = Path(depth_feature_manifest) if depth_feature_manifest else None
+            manifest = load_manifest(manifest_path)
+            part_files = discover_part_files(Path(depth_feature_data_dir), manifest_path)
+            if not part_files:
+                raise FileNotFoundError(f"No depth .pt/.pth part files found under {depth_feature_data_dir}")
+            first_shard = torch.load(part_files[0], map_location="cpu")
+            if depth_feature_key == "auto":
+                depth_feature_key = (
+                    _manifest_key(manifest, ("feature_key", "feature_key_pred", "depth_feature_key"))
+                    or _first_present_key(first_shard, DEPTH_FEATURE_CANDIDATES)
+                )
+            self.depth_index = ShardFieldIndex(
+                part_files,
+                value_key=depth_feature_key,
+                id_key=depth_feature_id_key,
+                manifest=manifest,
+                preload=False,
+                label="deploy offline depth feature",
+            )
+            print(
+                json.dumps(
+                    {
+                        "deploy_depth_features": {
+                            "samples": len(self.depth_index),
+                            "feature_key": depth_feature_key,
+                            "id_key": self.depth_index.id_key,
+                            "data_dir": depth_feature_data_dir,
+                        }
+                    }
+                )
+            )
         self.action_scale_list = []
         with open(action_scale_file, 'r') as file:
             reader = csv.reader(file)
@@ -101,13 +148,28 @@ class LAPAServer:
             # Convert the image to a NumPy array
             image = np.array(image)
 
-            prompts = [{'image': [image], 'question':instruction}]
+            prompt = {'image': [image], 'question': instruction}
+            depth_id = payload.get("depth_id")
+            if self.depth_index is not None:
+                if depth_id is None:
+                    raise ValueError("This LAPA-Depth server requires payload['depth_id'].")
+                if depth_id not in self.depth_index:
+                    raise KeyError(f"depth_id not found in depth feature shards: {depth_id}")
+                prompt["depth_feature"] = np.asarray(self.depth_index.get(depth_id), dtype=np.float32)
+
+            prompts = [prompt]
 
             action_outputs = self.model(prompts)
             action_outputs = action_outputs[0]
 
 
             action = self.get_averaged_values(action_outputs)
+            if payload.get("return_debug", False):
+                action = {
+                    "action": action,
+                    "action_tokens": np.asarray(action_outputs).tolist(),
+                    "depth_id": depth_id,
+                }
 
             if double_encode:
                 return JSONResponse(json_numpy.dumps(action))
@@ -161,11 +223,34 @@ class DeployConfig:
     image_aug: int = 1
     jax_distributed: dict = JaxDistributedConfig.get_default_config()
     action_scale_file: str = None
+    depth_feature_data_dir: str = ""
+    depth_feature_manifest: str = ""
+    depth_feature_key: str = "auto"
+    depth_feature_id_key: str = "auto"
 
 
 @draccus.wrap()
 def deploy(cfg: DeployConfig) -> None:
-    server = LAPAServer(cfg.load_checkpoint, cfg.vqgan_checkpoint, cfg.seed, cfg.mesh_dim, cfg.dtype, cfg.load_llama_config, cfg.update_llama_config, cfg.tokens_per_delta, cfg.tokens_per_action, cfg.vocab_file, cfg.multi_image, cfg.jax_distributed, cfg.action_scale_file, cfg.image_aug)
+    server = LAPAServer(
+        cfg.load_checkpoint,
+        cfg.vqgan_checkpoint,
+        cfg.seed,
+        cfg.mesh_dim,
+        cfg.dtype,
+        cfg.load_llama_config,
+        cfg.update_llama_config,
+        cfg.tokens_per_delta,
+        cfg.tokens_per_action,
+        cfg.vocab_file,
+        cfg.multi_image,
+        cfg.jax_distributed,
+        cfg.action_scale_file,
+        cfg.image_aug,
+        cfg.depth_feature_data_dir,
+        cfg.depth_feature_manifest,
+        cfg.depth_feature_key,
+        cfg.depth_feature_id_key,
+    )
     server.run(cfg.host, port=cfg.port)
 
 
