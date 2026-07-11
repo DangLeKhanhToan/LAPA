@@ -84,10 +84,6 @@ EVAL_LOG_FREQ="${EVAL_LOG_FREQ:-100}"
 SAVE_MODEL_FREQ="${SAVE_MODEL_FREQ:-$TOTAL_STEPS}"
 SAVE_MILESTONE_FREQ="${SAVE_MILESTONE_FREQ:-0}"
 RUNTIME_LOG_STEPS="${RUNTIME_LOG_STEPS:-${runtime_log_steps:-3}}"
-TOKENIZER_PROCESSES="${TOKENIZER_PROCESSES:-1}"
-TOKENIZER_PARALLEL_CHUNK_SIZE="${TOKENIZER_PARALLEL_CHUNK_SIZE:-128}"
-TOKENIZER_PARALLEL_BATCH_SIZE="${TOKENIZER_PARALLEL_BATCH_SIZE:-128}"
-ACCUMULATE_GRADIENT_STEPS="${ACCUMULATE_GRADIENT_STEPS:-1}"
 
 args=(
   -u -m latent_pretraining.train
@@ -108,7 +104,7 @@ args=(
   --optimizer.type="adamw"
   --llama.action_vocab_size="$ACTION_VOCAB_SIZE"
   --llama.delta_vocab_size=8
-  --optimizer.accumulate_gradient_steps="$ACCUMULATE_GRADIENT_STEPS"
+  --optimizer.accumulate_gradient_steps=1
   --optimizer.adamw_optimizer.weight_decay=0
   --optimizer.adamw_optimizer.lr="$LR"
   --optimizer.adamw_optimizer.end_lr="$LR"
@@ -130,9 +126,9 @@ args=(
   --train_dataset.json_delta_action_dataset.path="$TRAIN_JSONL"
   --train_dataset.json_delta_action_dataset.seq_length="$SEQ_LENGTH"
   --train_dataset.json_delta_action_dataset.batch_size="$BATCH_SIZE"
-  --train_dataset.json_delta_action_dataset.tokenizer_processes="$TOKENIZER_PROCESSES"
-  --train_dataset.json_delta_action_dataset.tokenizer_parallel_chunk_size="$TOKENIZER_PARALLEL_CHUNK_SIZE"
-  --train_dataset.json_delta_action_dataset.tokenizer_parallel_batch_size="$TOKENIZER_PARALLEL_BATCH_SIZE"
+  --train_dataset.json_delta_action_dataset.tokenizer_processes=1
+  --train_dataset.json_delta_action_dataset.tokenizer_parallel_chunk_size=128
+  --train_dataset.json_delta_action_dataset.tokenizer_parallel_batch_size=128
   --train_dataset.json_delta_action_dataset.use_data_sharded_loader=True
   --train_dataset.json_delta_action_dataset.depth_feature_data_dir="$DEPTH_DATA_DIR"
   --train_dataset.json_delta_action_dataset.depth_feature_key="$DEPTH_FEATURE_KEY"
@@ -164,7 +160,7 @@ echo "[train-depth-suite] output: $OUTPUT_DIR/$EXPERIMENT_ID"
 echo "[train-depth-suite] mesh: $MESH_DIM"
 echo "[train-depth-suite] total_steps: $TOTAL_STEPS"
 echo "[train-depth-suite] batch_size: $BATCH_SIZE"
-echo "[train-depth-suite] tokenizer_processes: $TOKENIZER_PROCESSES"
+echo "[train-depth-suite] tokenizer_processes: 1"
 echo "[train-depth-suite] log_freq: $LOG_FREQ"
 echo "[train-depth-suite] save_model_freq: $SAVE_MODEL_FREQ"
 
