@@ -1,5 +1,7 @@
 import pprint
 import os
+import shutil
+import subprocess
 
 from tqdm import tqdm, trange
 import numpy as np
@@ -39,8 +41,91 @@ from tux.utils import open_file
 import tensorflow as tf
 tf.config.optimizer.set_jit(True)
 import time
+try:
+    import resource
+except ImportError:
+    resource = None
 
 random.seed(time.time())
+
+
+def _format_bytes(num_bytes):
+    value = float(num_bytes)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024.0:
+            return f"{value:.2f} {unit}"
+        value /= 1024.0
+    return f"{value:.2f} PiB"
+
+
+def _process_rss_bytes():
+    if resource is None:
+        return None
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    # Linux reports KiB, macOS reports bytes. This repo runs training on Linux.
+    return int(usage.ru_maxrss) * 1024
+
+
+def _gpu_memory_summary():
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi is None:
+        return "nvidia-smi not found"
+    try:
+        output = subprocess.check_output(
+            [
+                nvidia_smi,
+                "--query-gpu=index,name,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            stderr=subprocess.STDOUT,
+            timeout=10,
+        )
+    except Exception as exc:
+        return f"nvidia-smi failed: {type(exc).__name__}: {exc}"
+    lines = []
+    for line in output.strip().splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) == 4:
+            idx, name, used, total = parts
+            lines.append(f"gpu{idx} {name}: {used}/{total} MiB")
+        elif line.strip():
+            lines.append(line.strip())
+    return "; ".join(lines) if lines else "no GPU rows"
+
+
+def _shape_dtype(value):
+    shape = getattr(value, "shape", None)
+    dtype = getattr(value, "dtype", None)
+    if shape is None:
+        return type(value).__name__
+    return f"shape={tuple(shape)}, dtype={dtype}"
+
+
+def _batch_summary(batch):
+    if not isinstance(batch, dict):
+        return _shape_dtype(batch)
+    items = []
+    for key in sorted(batch.keys()):
+        items.append(f"{key}: {_shape_dtype(batch[key])}")
+    return "{ " + "; ".join(items) + " }"
+
+
+def _runtime_log(label, extra=None):
+    if jax.process_index() != 0:
+        return
+    rss = _process_rss_bytes()
+    payload = {
+        "label": label,
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "pid": os.getpid(),
+        "host": os.uname().nodename if hasattr(os, "uname") else os.environ.get("COMPUTERNAME", ""),
+        "rss_max": _format_bytes(rss) if rss is not None else "unavailable",
+        "gpu_memory": _gpu_memory_summary(),
+    }
+    if extra:
+        payload.update(extra)
+    print("[runtime] " + pprint.pformat(payload), flush=True)
 
 
 
@@ -90,6 +175,7 @@ FLAGS, FLAGS_DEF = define_flags_with_default(
     freeze=0,
     freeze_vision_params=False,
     mse_loss=1,
+    runtime_log_steps=3,
 ) 
 
 
@@ -105,6 +191,21 @@ def main(argv):
         enable=FLAGS.log_all_worker or (jax.process_index() == 0),
     )
     set_random_seed(FLAGS.seed)
+    _runtime_log(
+        "startup",
+        {
+            "jax_process_index": jax.process_index(),
+            "jax_process_count": jax.process_count(),
+            "jax_device_count": jax.device_count(),
+            "jax_local_device_count": jax.local_device_count(),
+            "jax_devices": [str(device) for device in jax.devices()],
+            "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>"),
+            "mesh_dim": FLAGS.mesh_dim,
+            "modality": FLAGS.modality,
+            "total_steps": FLAGS.total_steps,
+            "batch_size": getattr(FLAGS.train_dataset.json_delta_action_dataset, "batch_size", None),
+        },
+    )
 
     if jax.process_index() == 0:
         output_dir = logger.output_dir
@@ -129,11 +230,27 @@ def main(argv):
     else:
         raise ValueError(f"Unsupported modality: {FLAGS.modality}")
 
+    mesh_start = time.time()
     mesh = config_cls.get_jax_mesh(FLAGS.mesh_dim)
     node_info = config_cls.get_ranks_and_size(mesh)
+    _runtime_log(
+        "mesh_ready",
+        {
+            "elapsed_sec": round(time.time() - mesh_start, 3),
+            "node_info": str(node_info),
+        },
+    )
 
     tokenizer = config_cls.get_tokenizer(FLAGS.tokenizer)
+    dataset_start = time.time()
     dataset = DatasetFactory.load_dataset(FLAGS.train_dataset, tokenizer, node_info=node_info)
+    _runtime_log(
+        "dataset_ready",
+        {
+            "elapsed_sec": round(time.time() - dataset_start, 3),
+            "dataset_type": FLAGS.train_dataset.type,
+        },
+    )
     if FLAGS.autoresume and tux.check_exists(output_dir):
         logging.info('Found existing output. Resuming dataset from latest checkpoint...')
         resume_path = f"{output_dir}/dataset.pkl"
@@ -150,6 +267,15 @@ def main(argv):
         unseen_eval_iterator = iter(unseen_eval_dataset)
 
     seq_length = dataset.seq_length
+    _runtime_log(
+        "dataset_config",
+        {
+            "seq_length": seq_length,
+            "vocab_size": getattr(dataset, "vocab_size", None),
+            "depth_feature_dir": getattr(FLAGS.train_dataset.json_delta_action_dataset, "depth_feature_data_dir", ""),
+            "depth_feature_dim": getattr(FLAGS.train_dataset.json_delta_action_dataset, "depth_feature_dim", None),
+        },
+    )
 
     if FLAGS.load_llama_config != '':
         llama_config = config_cls.load_config(FLAGS.load_llama_config)
@@ -696,7 +822,11 @@ def main(argv):
             )
         return rng_generator(), metrics
 
+    _runtime_log("eval_shape_start")
+    eval_shape_start = time.time()
     train_state_shapes = jax.eval_shape(init_fn, next_rng())
+    _runtime_log("eval_shape_done", {"elapsed_sec": round(time.time() - eval_shape_start, 3)})
+    partition_start = time.time()
     train_state_partition = match_partition_rules(
         config_cls.get_partition_rules(llama_config.scan_layers, llama_config.param_scan_axis), train_state_shapes
     )
@@ -704,6 +834,7 @@ def main(argv):
     shard_fns, gather_fns = make_shard_and_gather_fns(
         train_state_partition, train_state_shapes
     )
+    _runtime_log("partition_ready", {"elapsed_sec": round(time.time() - partition_start, 3)})
     checkpointer = StreamingCheckpointer(
         FLAGS.checkpointer, logger.output_dir,
         enable=jax.process_index() == 0,
@@ -813,15 +944,20 @@ def main(argv):
         if FLAGS.autoresume and tux.check_exists(output_dir):
             logging.info('Found existing output. Resuming model from latest checkpoint...')
             resume_path = f"trainstate::{output_dir}/streaming_train_state"
+            _runtime_log("checkpoint_load_start", {"checkpoint": resume_path})
+            load_start = time.time()
             train_state, restored_params = checkpointer.load_trainstate_checkpoint(
                 resume_path, train_state_shapes, shard_fns, max_buffer_size=32 * 2 ** 30
             )
+            _runtime_log("checkpoint_load_done", {"elapsed_sec": round(time.time() - load_start, 3)})
         elif FLAGS.load_checkpoint != '':
             params_target = train_state_shapes.params['params']
             params_shard_fns = shard_fns.params['params']
             load_type, load_path = FLAGS.load_checkpoint.split('::', 1)
             train_state = None
             restored_params = None
+            _runtime_log("checkpoint_load_start", {"load_type": load_type, "checkpoint": load_path})
+            load_start = time.time()
             if load_type == 'trainstate':
                 train_state = load_checkpoint(
                     path=load_path,
@@ -852,16 +988,24 @@ def main(argv):
                 restored_params = flax.core.frozen_dict.freeze(
                     {'params': restored_params}
                 )
+            _runtime_log("checkpoint_load_done", {"elapsed_sec": round(time.time() - load_start, 3)})
 
         if train_state is None and restored_params is None:
             # Initialize from scratch
+            _runtime_log("train_state_init_start", {"source": "scratch"})
+            init_start = time.time()
             train_state = sharded_init_fn(next_rng())
+            _runtime_log("train_state_init_done", {"elapsed_sec": round(time.time() - init_start, 3)})
         elif train_state is None and restored_params is not None:
             # Restore from params but initialize train_state
+            _runtime_log("train_state_init_start", {"source": "restored_params"})
+            init_start = time.time()
             train_state = sharded_create_trainstate_from_params(restored_params)
             del restored_params
+            _runtime_log("train_state_init_done", {"elapsed_sec": round(time.time() - init_start, 3)})
 
         start_step = int(jax.device_get(train_state.step))
+        _runtime_log("train_state_ready", {"start_step": start_step})
 
         if FLAGS.save_model_freq > 0:
             save_checkpoint(train_state)
@@ -869,10 +1013,47 @@ def main(argv):
         sharded_rng = next_rng()
 
         step_counter = trange(start_step, FLAGS.total_steps, ncols=0)
-        for step, (batch, dataset_metrics) in zip(step_counter, dataset):
+        dataset_iterator = iter(dataset)
+        runtime_log_steps = max(int(FLAGS.runtime_log_steps), 0)
+        _runtime_log(
+            "train_loop_start",
+            {
+                "start_step": start_step,
+                "total_steps": FLAGS.total_steps,
+                "runtime_log_steps": runtime_log_steps,
+            },
+        )
+        for step in step_counter:
+            fetch_start = time.time()
+            try:
+                batch, dataset_metrics = next(dataset_iterator)
+            except StopIteration:
+                break
+            fetch_elapsed = time.time() - fetch_start
+            if step < start_step + runtime_log_steps:
+                _runtime_log(
+                    "batch_ready",
+                    {
+                        "step": step,
+                        "fetch_sec": round(fetch_elapsed, 3),
+                        "batch": _batch_summary(batch),
+                        "dataset_metrics": pprint.pformat(dataset_metrics),
+                    },
+                )
+            train_step_start = time.time()
             train_state, sharded_rng, metrics = sharded_train_step(
                 train_state, sharded_rng, batch 
             )
+            if step < start_step + runtime_log_steps:
+                metrics_host = jax.device_get(metrics)
+                _runtime_log(
+                    "train_step_done",
+                    {
+                        "step": step,
+                        "step_sec": round(time.time() - train_step_start, 3),
+                        "metrics": pprint.pformat(metrics_host),
+                    },
+                )
             if step % FLAGS.log_freq == 0:
                 if FLAGS.eval_steps > 0 and step % FLAGS.eval_log_freq == 0:
                     eval_metric_list = []
