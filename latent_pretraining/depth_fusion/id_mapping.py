@@ -1,6 +1,9 @@
 from pathlib import PurePosixPath
 
 
+DEPTH_PREFIX_SUITES = {"libero_spatial", "libero_object", "libero_goal"}
+
+
 def lapa_image_path_to_depth_id(image_path: str) -> str:
     """Convert a LAPA JSONL RGB image path into the Stage-2.5 depth feature id.
 
@@ -9,6 +12,10 @@ def lapa_image_path_to_depth_id(image_path: str) -> str:
 
     Expected depth feature id form:
         libero_90_TASK_NAME_demo_0_000012
+
+    Some LIBERO depth-feature shards were generated from depth-image folders and
+    insert a literal "depth" component after the suite name:
+        libero_spatial_depth_TASK_NAME_demo_0_000012
     """
     if not image_path:
         raise ValueError("image_path is empty")
@@ -36,7 +43,8 @@ def lapa_image_path_to_depth_id(image_path: str) -> str:
     demo_index = demo.split("_", 1)[1]
     step_stem = PurePosixPath(step_name).stem
     step_index = int(step_stem.split("_", 1)[1])
-    return f"{suite}_{task}_demo_{demo_index}_{step_index:06d}"
+    suite_prefix = f"{suite}_depth" if suite in DEPTH_PREFIX_SUITES else suite
+    return f"{suite_prefix}_{task}_demo_{demo_index}_{step_index:06d}"
 
 
 def resolve_lapa_sample_id(example: dict, id_key: str = "id", source: str = "auto") -> str:

@@ -71,6 +71,13 @@ fi
 
 ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')}"
 UPDATE_LLAMA_CONFIG="${UPDATE_LLAMA_CONFIG:-dict(action_vocab_size=${ACTION_VOCAB_SIZE},delta_vocab_size=8,sample_mode='text',theta=50000000,max_sequence_length=32768,scan_attention=False,scan_query_chunk_size=128,scan_key_chunk_size=128,scan_mlp=False,scan_mlp_chunk_size=8192,scan_layers=True)}"
+case "$SUITE" in
+  libero_spatial|libero_object|libero_goal)
+    if [[ "$DEPTH_VIDEO_ID" == ${SUITE}_* && "$DEPTH_VIDEO_ID" != ${SUITE}_depth_* ]]; then
+      DEPTH_VIDEO_ID="${DEPTH_VIDEO_ID/${SUITE}_/${SUITE}_depth_}"
+    fi
+    ;;
+esac
 
 server_args=(
   -m latent_pretraining.deploy

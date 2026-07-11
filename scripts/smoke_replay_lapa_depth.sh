@@ -21,7 +21,13 @@ VOCAB_FILE="${VOCAB_FILE:-$LAPA_ROOT/lapa_checkpoints/tokenizer.model}"
 DEPTH_MANIFEST="${DEPTH_MANIFEST:-}"
 DEPTH_FEATURE_KEY="${DEPTH_FEATURE_KEY:-auto}"
 DEPTH_ID_KEY="${DEPTH_ID_KEY:-auto}"
-IMAGE_ROOT="${IMAGE_ROOT:-$DATA_ROOT}"
+if [[ -z "${IMAGE_ROOT:-}" ]]; then
+  if [[ -d "$DATA_ROOT/images" ]]; then
+    IMAGE_ROOT="$DATA_ROOT"
+  else
+    IMAGE_ROOT="$LAPA_ROOT/datasets/libero_data"
+  fi
+fi
 OUTPUT_JSON="${OUTPUT_JSON:-$LAPA_ROOT/outputs/smoke_lapa_depth_replay/results.json}"
 PORT="${PORT:-32820}"
 TOKENS_PER_DELTA="${TOKENS_PER_DELTA:-4}"

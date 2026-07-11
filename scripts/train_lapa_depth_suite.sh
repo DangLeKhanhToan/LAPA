@@ -11,7 +11,13 @@ LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
 SUITE="${SUITE:-libero_90}"
 DATA_ROOT="${DATA_ROOT:-$LAPA_ROOT/datasets/lapa_libero_v2}"
 TRAIN_JSONL="${TRAIN_JSONL:-$DATA_ROOT/${SUITE}.jsonl}"
-IMAGE_ROOT="${IMAGE_ROOT:-$DATA_ROOT/}"
+if [[ -z "${IMAGE_ROOT:-}" ]]; then
+  if [[ -d "$DATA_ROOT/images" ]]; then
+    IMAGE_ROOT="$DATA_ROOT/"
+  else
+    IMAGE_ROOT="$LAPA_ROOT/datasets/libero_data/"
+  fi
+fi
 ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$DATA_ROOT/action_bins_${SUITE}.csv}"
 DEPTH_BASE_DIR="${DEPTH_BASE_DIR:-$LAPA_ROOT/datasets/features_depth_branch/stage25_libero_features_model4/${SUITE}/stage25_model4}"
 DEPTH_DATA_DIR="${DEPTH_DATA_DIR:-}"

@@ -20,7 +20,13 @@ JSON_ID_SOURCE="${JSON_ID_SOURCE:-auto}"
 DEPTH_ID_KEY="${DEPTH_ID_KEY:-auto}"
 DEPTH_FEATURE_KEY="${DEPTH_FEATURE_KEY:-auto}"
 DEPTH_FEATURE_DIM="${DEPTH_FEATURE_DIM:-1024}"
-IMAGE_ROOT="${IMAGE_ROOT:-$DATA_ROOT/}"
+if [[ -z "${IMAGE_ROOT:-}" ]]; then
+  if [[ -d "$DATA_ROOT/images" ]]; then
+    IMAGE_ROOT="$DATA_ROOT/"
+  else
+    IMAGE_ROOT="$LAPA_ROOT/datasets/libero_data/"
+  fi
+fi
 TOKENIZER_PATH="${TOKENIZER_PATH:-$LAPA_ROOT/lapa_checkpoints/tokenizer.model}"
 VQGAN_CKPT="${VQGAN_CKPT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
 LAPA_PARAMS="${LAPA_PARAMS:-$LAPA_ROOT/lapa_checkpoints/lapa_7b_sth/params}"
