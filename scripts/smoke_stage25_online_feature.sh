@@ -6,6 +6,87 @@ PROJECT_DIR="$( cd -- "$( dirname -- "$SCRIPT_DIR" )" &> /dev/null && pwd )"
 cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}"
 
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rgb_image)
+      RGB_IMAGE="$2"
+      shift 2
+      ;;
+    --depth_image)
+      DEPTH_IMAGE="$2"
+      shift 2
+      ;;
+    --instruction)
+      INSTRUCTION="$2"
+      shift 2
+      ;;
+    --output_json)
+      OUTPUT_JSON="$2"
+      shift 2
+      ;;
+    --port)
+      PORT="$2"
+      shift 2
+      ;;
+    --model_py)
+      MODEL_PY="$2"
+      shift 2
+      ;;
+    --lapa_root)
+      LAPA_ROOT="$2"
+      shift 2
+      ;;
+    --depth_branch_root)
+      DEPTH_BRANCH_ROOT="$2"
+      shift 2
+      ;;
+    --stage25_model_name)
+      STAGE25_MODEL_NAME="$2"
+      shift 2
+      ;;
+    --stage25_model_checkpoint)
+      STAGE25_MODEL_CHECKPOINT="$2"
+      shift 2
+      ;;
+    --original_lapa_checkpoint)
+      ORIGINAL_LAPA_CHECKPOINT="$2"
+      shift 2
+      ;;
+    --vqgan_checkpoint)
+      VQGAN_CHECKPOINT="$2"
+      shift 2
+      ;;
+    --vocab_file)
+      VOCAB_FILE="$2"
+      shift 2
+      ;;
+    --depth_anything_repo_dir)
+      DEPTH_ANYTHING_REPO_DIR="$2"
+      shift 2
+      ;;
+    --depth_anything_checkpoint)
+      DEPTH_ANYTHING_CHECKPOINT="$2"
+      shift 2
+      ;;
+    --depth_anything_encoder)
+      DEPTH_ANYTHING_ENCODER="$2"
+      shift 2
+      ;;
+    --depth_anything_input_size)
+      DEPTH_ANYTHING_INPUT_SIZE="$2"
+      shift 2
+      ;;
+    --depth_anything_device)
+      DEPTH_ANYTHING_DEVICE="$2"
+      shift 2
+      ;;
+    *)
+      echo "ERROR: unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
 : "${RGB_IMAGE:?Set RGB_IMAGE to one RGB frame path.}"
 : "${INSTRUCTION:?Set INSTRUCTION to the task instruction.}"
 
@@ -26,6 +107,11 @@ PORT="${PORT:-32823}"
 OUTPUT_JSON="${OUTPUT_JSON:-$LAPA_ROOT/outputs/stage25_${STAGE25_MODEL_NAME}_smoke.json}"
 
 mkdir -p "$(dirname "$OUTPUT_JSON")"
+
+export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
+export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.55}"
+export TF_FORCE_GPU_ALLOW_GROWTH="${TF_FORCE_GPU_ALLOW_GROWTH:-true}"
+export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
 
 server_args=(
   -m eval.stage25_feature_server
@@ -55,7 +141,7 @@ else
 fi
 
 echo "[stage25-smoke] starting server on $PORT"
-CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" "$MODEL_PY" "${server_args[@]}" &
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${STAGE25_CUDA_VISIBLE_DEVICES:-0}}" "$MODEL_PY" "${server_args[@]}" &
 SERVER_PID=$!
 
 cleanup() {
