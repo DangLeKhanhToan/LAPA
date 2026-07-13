@@ -6,26 +6,26 @@ PROJECT_DIR="$( cd -- "$( dirname -- "$SCRIPT_DIR" )" &> /dev/null && pwd )"
 cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}"
 
-MODEL_PY="${MODEL_PY:-/scratch/users/create/smrvmdo/venvs/lapa-depth/bin/python}"
-LIBERO_PY="${LIBERO_PY:-/scratch/users/create/smrvmdo/venvs/LIBERO/bin/python}"
+MODEL_PY="${MODEL_PY:-/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python}"
+LIBERO_PY="${LIBERO_PY:-$MODEL_PY}"
 LIBERO_REPO="${LIBERO_REPO:-$PROJECT_DIR/datasets/LIBERO}"
 LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
-DEPTH_BRANCH_ROOT="${DEPTH_BRANCH_ROOT:-$LAPA_ROOT/../Depth_branch}"
+DEPTH_BRANCH_ROOT="${DEPTH_BRANCH_ROOT:-$LAPA_ROOT/Depth_branch}"
 SUITE="${SUITE:-libero_spatial}"
 DATA_ROOT="${DATA_ROOT:-$LAPA_ROOT/datasets/lapa_libero_v2}"
 DEPTH_ANYTHING_REPO_DIR="${DEPTH_ANYTHING_REPO_DIR:-$LAPA_ROOT/third_party/depth_anything_v2}"
 DEPTH_ANYTHING_CHECKPOINT="${DEPTH_ANYTHING_CHECKPOINT:-$LAPA_ROOT/checkpoints/depth_anything_v2_sth2sth/depth_anything_v2_sth2sth.pth}"
-DEPTH_ANYTHING_ENCODER="${DEPTH_ANYTHING_ENCODER:-vitl}"
-DEPTH_ANYTHING_INPUT_SIZE="${DEPTH_ANYTHING_INPUT_SIZE:-518}"
+DEPTH_ANYTHING_ENCODER="${DEPTH_ANYTHING_ENCODER:-vitb}"
+DEPTH_ANYTHING_INPUT_SIZE="${DEPTH_ANYTHING_INPUT_SIZE:-384}"
 DEPTH_ANYTHING_DEVICE="${DEPTH_ANYTHING_DEVICE:-auto}"
 
 FINETUNED_CHECKPOINT="${FINETUNED_CHECKPOINT:-params::$LAPA_ROOT/outputs/lapa_depth_stage3_${SUITE}/streaming_params}"
-ORIGINAL_LAPA_CHECKPOINT="${ORIGINAL_LAPA_CHECKPOINT:-params::$LAPA_ROOT/lapa_checkpoints/lapa_7b_sth/params}"
+ORIGINAL_LAPA_CHECKPOINT="${ORIGINAL_LAPA_CHECKPOINT:-params::$LAPA_ROOT/lapa_checkpoints/pretraining_LAPA_Sth2Sth}"
 ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$DATA_ROOT/action_bins_${SUITE}.csv}"
 VQGAN_CHECKPOINT="${VQGAN_CHECKPOINT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
 VOCAB_FILE="${VOCAB_FILE:-$LAPA_ROOT/lapa_checkpoints/tokenizer.model}"
 STAGE25_MODEL_NAME="${STAGE25_MODEL_NAME:-model4}"
-STAGE25_MODEL_CHECKPOINT="${STAGE25_MODEL_CHECKPOINT:-$DEPTH_BRANCH_ROOT/${STAGE25_MODEL_NAME}.65000.pt}"
+STAGE25_MODEL_CHECKPOINT="${STAGE25_MODEL_CHECKPOINT:-$LAPA_ROOT/lapa_checkpoints/depth_model/${STAGE25_MODEL_NAME}.65000.pt}"
 
 POLICY_PORT="${POLICY_PORT:-32820}"
 STAGE25_PORT="${STAGE25_PORT:-32821}"
@@ -37,13 +37,18 @@ INIT_OFFSET="${INIT_OFFSET:-0}"
 ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')}"
 UPDATE_LLAMA_CONFIG="${UPDATE_LLAMA_CONFIG:-dict(action_vocab_size=${ACTION_VOCAB_SIZE},delta_vocab_size=8,sample_mode='text',theta=50000000,max_sequence_length=32768,scan_attention=False,scan_query_chunk_size=128,scan_key_chunk_size=128,scan_mlp=False,scan_mlp_chunk_size=8192,scan_layers=True)}"
 
-USE_SINGULARITY="${USE_SINGULARITY:-1}"
+USE_SINGULARITY="${USE_SINGULARITY:-0}"
 RENDER_SIF_URL="${RENDER_SIF_URL:-docker://nvidia/opengl:1.2-glvnd-runtime-ubuntu22.04}"
-RENDER_SIF="${RENDER_SIF:-/scratch/users/create/smrvmdo/venvs/opengl_glvnd.sif}"
-export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-/scratch/users/create/smrvmdo/.singularity_cache}"
+RENDER_SIF="${RENDER_SIF:-$LAPA_ROOT/.apptainer/opengl_glvnd.sif}"
+export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-$LAPA_ROOT/.apptainer/cache}"
 export SINGULARITY_CACHEDIR="$APPTAINER_CACHEDIR"
-export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-/scratch/users/create/smrvmdo/.singularity_tmp}"
+export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-$LAPA_ROOT/.apptainer/tmp}"
 export SINGULARITY_TMPDIR="$APPTAINER_TMPDIR"
+
+export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
+export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.55}"
+export TF_FORCE_GPU_ALLOW_GROWTH="${TF_FORCE_GPU_ALLOW_GROWTH:-true}"
+export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
 
 [[ -d "$DEPTH_BRANCH_ROOT" ]] || { echo "ERROR: DEPTH_BRANCH_ROOT not found: $DEPTH_BRANCH_ROOT" >&2; exit 1; }
 [[ -f "$STAGE25_MODEL_CHECKPOINT" ]] || { echo "ERROR: STAGE25_MODEL_CHECKPOINT not found: $STAGE25_MODEL_CHECKPOINT" >&2; exit 1; }
@@ -124,7 +129,7 @@ if [[ "$USE_SINGULARITY" == "1" ]]; then
     mkdir -p "$APPTAINER_CACHEDIR" "$APPTAINER_TMPDIR" "$(dirname "$RENDER_SIF")"
     singularity pull "$RENDER_SIF" "$RENDER_SIF_URL"
   fi
-  singularity exec --nv --bind /scratch \
+  singularity exec --nv --bind "$LAPA_ROOT:$LAPA_ROOT" \
     --env "MUJOCO_GL=${MUJOCO_GL},PYOPENGL_PLATFORM=${MUJOCO_GL},MUJOCO_EGL_DEVICE_ID=${DEV},PYTHONPATH=${LIBERO_REPO}" \
     "$RENDER_SIF" \
     "$LIBERO_PY" "${client_args[@]}"
