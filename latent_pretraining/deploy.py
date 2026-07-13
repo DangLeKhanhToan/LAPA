@@ -22,14 +22,6 @@ from tux import JaxDistributedConfig
 from latent_pretraining.delta_llama import VideoLLaMAConfig
 from tux import JaxDistributedConfig, set_random_seed
 import csv
-from latent_pretraining.depth_fusion.data_libero import (
-    DEPTH_FEATURE_CANDIDATES,
-    ShardFieldIndex,
-    _first_present_key,
-    _manifest_key,
-    discover_part_files,
-    load_manifest,
-)
 
 class FLAGSClass:
     def __init__(self, flag_dict):
@@ -55,10 +47,6 @@ class LAPAServer:
             jax_distributed: dict,
             action_scale_file: str,
             img_aug: int,
-            depth_feature_data_dir: str = "",
-            depth_feature_manifest: str = "",
-            depth_feature_key: str = "auto",
-            depth_feature_id_key: str = "auto",
             stage25_feature_server_url: str = "",
         ) -> Path:
         
@@ -93,42 +81,7 @@ class LAPAServer:
         else: 
             self.model = ActionSampler(flags)
         self.load_checkpoint= load_checkpoint
-        self.depth_index = None
         self.stage25_feature_server_url = stage25_feature_server_url.rstrip("/")
-        if depth_feature_data_dir:
-            import torch
-
-            manifest_path = Path(depth_feature_manifest) if depth_feature_manifest else None
-            manifest = load_manifest(manifest_path)
-            part_files = discover_part_files(Path(depth_feature_data_dir), manifest_path)
-            if not part_files:
-                raise FileNotFoundError(f"No depth .pt/.pth part files found under {depth_feature_data_dir}")
-            first_shard = torch.load(part_files[0], map_location="cpu")
-            if depth_feature_key == "auto":
-                depth_feature_key = (
-                    _manifest_key(manifest, ("feature_key", "feature_key_pred", "depth_feature_key"))
-                    or _first_present_key(first_shard, DEPTH_FEATURE_CANDIDATES)
-                )
-            self.depth_index = ShardFieldIndex(
-                part_files,
-                value_key=depth_feature_key,
-                id_key=depth_feature_id_key,
-                manifest=manifest,
-                preload=False,
-                label="deploy offline depth feature",
-            )
-            print(
-                json.dumps(
-                    {
-                        "deploy_depth_features": {
-                            "samples": len(self.depth_index),
-                            "feature_key": depth_feature_key,
-                            "id_key": self.depth_index.id_key,
-                            "data_dir": depth_feature_data_dir,
-                        }
-                    }
-                )
-            )
         self.action_scale_list = []
         with open(action_scale_file, 'r') as file:
             reader = csv.reader(file)
@@ -152,20 +105,21 @@ class LAPAServer:
             image = np.array(image)
 
             prompt = {'image': [image], 'question': instruction}
-            depth_id = payload.get("depth_id")
             depth_feature = payload.get("depth_feature")
             stage25_debug = None
             if depth_feature is not None:
                 prompt["depth_feature"] = np.asarray(depth_feature, dtype=np.float32)
-            elif self.stage25_feature_server_url and payload.get("depth_image") is not None:
+            elif self.stage25_feature_server_url:
+                stage25_request = {
+                    "image": image_path,
+                    "instruction": instruction,
+                    "return_debug": payload.get("return_debug", False),
+                }
+                if payload.get("depth_image") is not None:
+                    stage25_request["depth_image"] = payload["depth_image"]
                 response = requests.post(
                     f"{self.stage25_feature_server_url}/feature",
-                    json={
-                        "image": image_path,
-                        "depth_image": payload["depth_image"],
-                        "instruction": instruction,
-                        "return_debug": payload.get("return_debug", False),
-                    },
+                    json=stage25_request,
                     timeout=180,
                 )
                 response.raise_for_status()
@@ -179,13 +133,8 @@ class LAPAServer:
                     "model_name": stage25_payload.get("model_name"),
                     "z_depth_shape": stage25_payload.get("z_depth_shape"),
                     "z_rgb_shape": stage25_payload.get("z_rgb_shape"),
+                    "depth_source": stage25_payload.get("depth_source"),
                 }
-            elif self.depth_index is not None:
-                if depth_id is None:
-                    raise ValueError("This LAPA-Depth server requires payload['depth_id'].")
-                if depth_id not in self.depth_index:
-                    raise KeyError(f"depth_id not found in depth feature shards: {depth_id}")
-                prompt["depth_feature"] = np.asarray(self.depth_index.get(depth_id), dtype=np.float32)
 
             prompts = [prompt]
 
@@ -198,7 +147,6 @@ class LAPAServer:
                 action = {
                     "action": action,
                     "action_tokens": np.asarray(action_outputs).tolist(),
-                    "depth_id": depth_id,
                 }
                 if stage25_debug is not None:
                     action["stage25"] = stage25_debug
@@ -255,10 +203,6 @@ class DeployConfig:
     image_aug: int = 1
     jax_distributed: dict = JaxDistributedConfig.get_default_config()
     action_scale_file: str = None
-    depth_feature_data_dir: str = ""
-    depth_feature_manifest: str = ""
-    depth_feature_key: str = "auto"
-    depth_feature_id_key: str = "auto"
     stage25_feature_server_url: str = ""
 
 
@@ -279,10 +223,6 @@ def deploy(cfg: DeployConfig) -> None:
         cfg.jax_distributed,
         cfg.action_scale_file,
         cfg.image_aug,
-        cfg.depth_feature_data_dir,
-        cfg.depth_feature_manifest,
-        cfg.depth_feature_key,
-        cfg.depth_feature_id_key,
         cfg.stage25_feature_server_url,
     )
     server.run(cfg.host, port=cfg.port)

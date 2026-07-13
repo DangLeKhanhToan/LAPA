@@ -7,7 +7,6 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}"
 
 : "${RGB_IMAGE:?Set RGB_IMAGE to one RGB frame path.}"
-: "${DEPTH_IMAGE:?Set DEPTH_IMAGE to one depth frame path or .npy.}"
 : "${INSTRUCTION:?Set INSTRUCTION to the task instruction.}"
 
 MODEL_PY="${MODEL_PY:-/scratch/users/create/smrvmdo/venvs/lapa-depth/bin/python}"
@@ -18,6 +17,11 @@ STAGE25_MODEL_CHECKPOINT="${STAGE25_MODEL_CHECKPOINT:-$DEPTH_BRANCH_ROOT/${STAGE
 ORIGINAL_LAPA_CHECKPOINT="${ORIGINAL_LAPA_CHECKPOINT:-params::$LAPA_ROOT/lapa_checkpoints/lapa_7b_sth/params}"
 VQGAN_CHECKPOINT="${VQGAN_CHECKPOINT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
 VOCAB_FILE="${VOCAB_FILE:-$LAPA_ROOT/lapa_checkpoints/tokenizer.model}"
+DEPTH_ANYTHING_REPO_DIR="${DEPTH_ANYTHING_REPO_DIR:-$LAPA_ROOT/third_party/depth_anything_v2}"
+DEPTH_ANYTHING_CHECKPOINT="${DEPTH_ANYTHING_CHECKPOINT:-$LAPA_ROOT/checkpoints/depth_anything_v2_sth2sth/depth_anything_v2_sth2sth.pth}"
+DEPTH_ANYTHING_ENCODER="${DEPTH_ANYTHING_ENCODER:-vitl}"
+DEPTH_ANYTHING_INPUT_SIZE="${DEPTH_ANYTHING_INPUT_SIZE:-518}"
+DEPTH_ANYTHING_DEVICE="${DEPTH_ANYTHING_DEVICE:-auto}"
 PORT="${PORT:-32821}"
 OUTPUT_JSON="${OUTPUT_JSON:-$LAPA_ROOT/outputs/stage25_${STAGE25_MODEL_NAME}_smoke.json}"
 
@@ -35,6 +39,20 @@ server_args=(
   --host "127.0.0.1"
   --port "$PORT"
 )
+
+if [[ -n "${DEPTH_IMAGE:-}" ]]; then
+  echo "[stage25-smoke] using provided DEPTH_IMAGE=$DEPTH_IMAGE"
+else
+  [[ -d "$DEPTH_ANYTHING_REPO_DIR/depth_anything_v2" ]] || { echo "ERROR: DEPTH_ANYTHING_REPO_DIR is not a DepthAnythingV2 repo: $DEPTH_ANYTHING_REPO_DIR" >&2; exit 1; }
+  [[ -f "$DEPTH_ANYTHING_CHECKPOINT" ]] || { echo "ERROR: DEPTH_ANYTHING_CHECKPOINT not found: $DEPTH_ANYTHING_CHECKPOINT" >&2; exit 1; }
+  server_args+=(
+    --depth_anything_repo_dir "$DEPTH_ANYTHING_REPO_DIR"
+    --depth_anything_checkpoint "$DEPTH_ANYTHING_CHECKPOINT"
+    --depth_anything_encoder "$DEPTH_ANYTHING_ENCODER"
+    --depth_anything_input_size "$DEPTH_ANYTHING_INPUT_SIZE"
+    --depth_anything_device "$DEPTH_ANYTHING_DEVICE"
+  )
+fi
 
 echo "[stage25-smoke] starting server on $PORT"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" "$MODEL_PY" "${server_args[@]}" &
@@ -54,10 +72,12 @@ import requests
 url = "http://127.0.0.1:${PORT}/feature"
 payload = {
     "image": "${RGB_IMAGE}",
-    "depth_image": "${DEPTH_IMAGE}",
     "instruction": "${INSTRUCTION}",
     "return_debug": True,
 }
+depth_image = "${DEPTH_IMAGE:-}"
+if depth_image:
+    payload["depth_image"] = depth_image
 last = None
 for _ in range(60):
     try:

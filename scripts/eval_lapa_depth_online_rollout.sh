@@ -13,6 +13,11 @@ LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
 DEPTH_BRANCH_ROOT="${DEPTH_BRANCH_ROOT:-$LAPA_ROOT/../Depth_branch}"
 SUITE="${SUITE:-libero_spatial}"
 DATA_ROOT="${DATA_ROOT:-$LAPA_ROOT/datasets/lapa_libero_v2}"
+DEPTH_ANYTHING_REPO_DIR="${DEPTH_ANYTHING_REPO_DIR:-$LAPA_ROOT/third_party/depth_anything_v2}"
+DEPTH_ANYTHING_CHECKPOINT="${DEPTH_ANYTHING_CHECKPOINT:-$LAPA_ROOT/checkpoints/depth_anything_v2_sth2sth/depth_anything_v2_sth2sth.pth}"
+DEPTH_ANYTHING_ENCODER="${DEPTH_ANYTHING_ENCODER:-vitl}"
+DEPTH_ANYTHING_INPUT_SIZE="${DEPTH_ANYTHING_INPUT_SIZE:-518}"
+DEPTH_ANYTHING_DEVICE="${DEPTH_ANYTHING_DEVICE:-auto}"
 
 FINETUNED_CHECKPOINT="${FINETUNED_CHECKPOINT:-params::$LAPA_ROOT/outputs/lapa_depth_stage3_${SUITE}/streaming_params}"
 ORIGINAL_LAPA_CHECKPOINT="${ORIGINAL_LAPA_CHECKPOINT:-params::$LAPA_ROOT/lapa_checkpoints/lapa_7b_sth/params}"
@@ -43,6 +48,8 @@ export SINGULARITY_TMPDIR="$APPTAINER_TMPDIR"
 [[ -d "$DEPTH_BRANCH_ROOT" ]] || { echo "ERROR: DEPTH_BRANCH_ROOT not found: $DEPTH_BRANCH_ROOT" >&2; exit 1; }
 [[ -f "$STAGE25_MODEL_CHECKPOINT" ]] || { echo "ERROR: STAGE25_MODEL_CHECKPOINT not found: $STAGE25_MODEL_CHECKPOINT" >&2; exit 1; }
 [[ -f "$ACTION_SCALE_FILE" ]] || { echo "ERROR: ACTION_SCALE_FILE not found: $ACTION_SCALE_FILE" >&2; exit 1; }
+[[ -d "$DEPTH_ANYTHING_REPO_DIR/depth_anything_v2" ]] || { echo "ERROR: DEPTH_ANYTHING_REPO_DIR is not a DepthAnythingV2 repo: $DEPTH_ANYTHING_REPO_DIR" >&2; exit 1; }
+[[ -f "$DEPTH_ANYTHING_CHECKPOINT" ]] || { echo "ERROR: DEPTH_ANYTHING_CHECKPOINT not found: $DEPTH_ANYTHING_CHECKPOINT" >&2; exit 1; }
 
 stage25_args=(
   -m eval.stage25_feature_server
@@ -55,6 +62,11 @@ stage25_args=(
   --mesh_dim "1,1,1,1"
   --host "127.0.0.1"
   --port "$STAGE25_PORT"
+  --depth_anything_repo_dir "$DEPTH_ANYTHING_REPO_DIR"
+  --depth_anything_checkpoint "$DEPTH_ANYTHING_CHECKPOINT"
+  --depth_anything_encoder "$DEPTH_ANYTHING_ENCODER"
+  --depth_anything_input_size "$DEPTH_ANYTHING_INPUT_SIZE"
+  --depth_anything_device "$DEPTH_ANYTHING_DEVICE"
 )
 
 policy_args=(
@@ -75,6 +87,7 @@ echo "[eval-online] suite: $SUITE"
 echo "[eval-online] stage25 model: $STAGE25_MODEL_NAME $STAGE25_MODEL_CHECKPOINT"
 echo "[eval-online] original LAPA: $ORIGINAL_LAPA_CHECKPOINT"
 echo "[eval-online] finetuned policy: $FINETUNED_CHECKPOINT"
+echo "[eval-online] depthanything: $DEPTH_ANYTHING_ENCODER $DEPTH_ANYTHING_CHECKPOINT"
 echo "[eval-online] action bins: $ACTION_SCALE_FILE"
 echo "[eval-online] starting Stage2.5 server on $STAGE25_PORT"
 CUDA_VISIBLE_DEVICES="${STAGE25_CUDA_VISIBLE_DEVICES:-0}" "$MODEL_PY" "${stage25_args[@]}" &
@@ -101,7 +114,6 @@ client_args=(
   --n_eval_per_task "$N_EVAL_PER_TASK"
   --max_steps "$MAX_STEPS"
   --init_offset "$INIT_OFFSET"
-  --send_depth_image
 )
 
 MUJOCO_GL="${MUJOCO_GL:-egl}"

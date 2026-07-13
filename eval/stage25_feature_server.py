@@ -12,7 +12,7 @@ import os
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import numpy as np
 import uvicorn
@@ -50,12 +50,78 @@ def load_depth(depth_value: Any) -> Any:
     return depth_value
 
 
+class DepthAnythingV2Runner:
+    """Small adapter for a DepthAnythingV2 checkpoint trained on Sth2Sth."""
+
+    MODEL_CONFIGS = {
+        "vits": {"encoder": "vits", "features": 64, "out_channels": [48, 96, 192, 384]},
+        "vitb": {"encoder": "vitb", "features": 128, "out_channels": [96, 192, 384, 768]},
+        "vitl": {"encoder": "vitl", "features": 256, "out_channels": [256, 512, 1024, 1024]},
+        "vitg": {"encoder": "vitg", "features": 384, "out_channels": [1536, 1536, 1536, 1536]},
+    }
+
+    def __init__(self, repo_dir: str, checkpoint: str, encoder: str, input_size: int, device: str):
+        import torch
+
+        repo = Path(repo_dir).resolve()
+        if not (repo / "depth_anything_v2").exists():
+            raise FileNotFoundError(
+                f"Cannot find depth_anything_v2 package under {repo}. "
+                "Set --depth_anything_repo_dir to the cloned DepthAnythingV2 repo."
+            )
+        if encoder not in self.MODEL_CONFIGS:
+            raise ValueError(f"Unknown DepthAnythingV2 encoder {encoder!r}; choose one of {sorted(self.MODEL_CONFIGS)}")
+        if str(repo) not in sys.path:
+            sys.path.insert(0, str(repo))
+
+        from depth_anything_v2.dpt import DepthAnythingV2  # noqa: E402
+
+        self.input_size = input_size
+        self.device = torch.device(device if device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
+        self.model = DepthAnythingV2(**self.MODEL_CONFIGS[encoder])
+        state = torch.load(checkpoint, map_location="cpu")
+        if isinstance(state, dict) and "state_dict" in state:
+            state = state["state_dict"]
+        if isinstance(state, dict) and "model" in state:
+            state = state["model"]
+        self.model.load_state_dict(state, strict=True)
+        self.model.to(self.device).eval()
+
+    @staticmethod
+    def _to_uint16_depth(depth: np.ndarray) -> np.ndarray:
+        depth = np.asarray(depth, dtype=np.float32)
+        finite = np.isfinite(depth)
+        if not finite.any():
+            return np.zeros(depth.shape, dtype=np.uint16)
+        lo = float(depth[finite].min())
+        hi = float(depth[finite].max())
+        if hi <= lo:
+            return np.zeros(depth.shape, dtype=np.uint16)
+        depth = (depth - lo) / (hi - lo)
+        depth = np.clip(depth, 0.0, 1.0)
+        return (depth * 65535.0).astype(np.uint16)
+
+    def infer(self, rgb: np.ndarray) -> np.ndarray:
+        with __import__("torch").no_grad():
+            depth = self.model.infer_image(rgb, self.input_size)
+        return self._to_uint16_depth(depth)
+
+
 class Stage25FeatureServer:
     def __init__(self, args):
         Stage25RolloutFeatureExtractor, build_lapa, build_model = import_stage25_bundle(args.stage25_bundle_dir)
 
         self.image_size = args.image_size
         self.model_name = args.model_name
+        self.depth_anything: Optional[DepthAnythingV2Runner] = None
+        if args.depth_anything_checkpoint:
+            self.depth_anything = DepthAnythingV2Runner(
+                repo_dir=args.depth_anything_repo_dir,
+                checkpoint=args.depth_anything_checkpoint,
+                encoder=args.depth_anything_encoder,
+                input_size=args.depth_anything_input_size,
+                device=args.depth_anything_device,
+            )
         print(
             json.dumps(
                 {
@@ -64,6 +130,8 @@ class Stage25FeatureServer:
                         "model_name": args.model_name,
                         "model_checkpoint": args.model_checkpoint,
                         "original_lapa_checkpoint": args.original_lapa_checkpoint,
+                        "depth_anything_checkpoint": args.depth_anything_checkpoint,
+                        "depth_anything_encoder": args.depth_anything_encoder,
                     }
                 }
             ),
@@ -108,10 +176,19 @@ class Stage25FeatureServer:
         try:
             rgb_path = payload["image"]
             instruction = payload["instruction"]
-            depth_image = payload["depth_image"]
 
             rgb = load_rgb(rgb_path, self.image_size)
-            depth = load_depth(depth_image)
+            if payload.get("depth_image") is not None:
+                depth = load_depth(payload["depth_image"])
+                depth_source = "payload"
+            elif self.depth_anything is not None:
+                depth = self.depth_anything.infer(rgb)
+                depth_source = "depth_anything_v2"
+            else:
+                raise ValueError(
+                    "No depth_image was provided and DepthAnythingV2 is not configured. "
+                    "Set --depth_anything_checkpoint for rollout-time depth generation."
+                )
             out = self.extractor.step(rgb, instruction, depth)
             z_depth = out["z_depth_feature_pred"]
             z_rgb = out["z_rgb_feature"]
@@ -120,9 +197,11 @@ class Stage25FeatureServer:
                 "z_depth_feature_pred": z_depth.detach().cpu().float().numpy().tolist(),
                 "z_depth_shape": list(z_depth.shape),
                 "model_name": self.model_name,
+                "depth_source": depth_source,
             }
             if payload.get("return_debug", False):
                 result["z_rgb_shape"] = list(z_rgb.shape)
+                result["depth_shape"] = list(np.asarray(depth).shape)
             return JSONResponse(result)
         except Exception:
             traceback.print_exc()
@@ -160,6 +239,12 @@ def parse_args():
     parser.add_argument("--strict", type=int, default=1, choices=(0, 1))
     parser.add_argument("--repeat_depth_to_3ch", type=int, default=1, choices=(0, 1))
     parser.add_argument("--depth_scale", type=float, default=65535.0)
+
+    parser.add_argument("--depth_anything_repo_dir", type=str, default="")
+    parser.add_argument("--depth_anything_checkpoint", type=str, default="")
+    parser.add_argument("--depth_anything_encoder", type=str, default="vitl", choices=("vits", "vitb", "vitl", "vitg"))
+    parser.add_argument("--depth_anything_input_size", type=int, default=518)
+    parser.add_argument("--depth_anything_device", type=str, default="auto")
     return parser.parse_args()
 
 

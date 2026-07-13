@@ -176,7 +176,9 @@ tokenizer_processes=1
 
 ## 7. Rollout Smoke
 
-Use a checkpoint from smoke or full training:
+Use the online rollout path after training. Rollout computes depth features from
+the current RGB observation through DepthAnythingV2 Sth2Sth + Stage-2.5; it does
+not load offline `.pt` feature shards by ID.
 
 ```bash
 export FINETUNED_CHECKPOINT="params::$LAPA_ROOT/outputs/${EXPERIMENT_ID}/streaming_params"
@@ -185,14 +187,9 @@ export SUITE=libero_spatial
 export TASK_IDS=0
 export N_EVAL_PER_TASK=1
 export MAX_STEPS=80
-```
+export DEPTH_ANYTHING_REPO_DIR="$LAPA_ROOT/third_party/depth_anything_v2"
+export DEPTH_ANYTHING_CHECKPOINT="$LAPA_ROOT/checkpoints/depth_anything_v2_sth2sth/depth_anything_v2_sth2sth.pth"
+export DEPTH_ANYTHING_ENCODER=vitl
 
-For `libero_spatial`, `libero_object`, and `libero_goal`, depth IDs include
-`_depth` after the suite name. The rollout script auto-inserts it when needed.
-
-Example:
-
-```bash
-export DEPTH_VIDEO_ID=libero_spatial_pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate_demo_demo_0
-bash scripts/eval_lapa_depth_suite_rollout.sh
+bash scripts/eval_lapa_depth_online_rollout.sh
 ```

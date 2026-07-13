@@ -1,17 +1,15 @@
 """
 Depth-aware LIBERO rollout client for LAPA-Depth.
 
-This mirrors ZaMin/LAPA/eval/eval_libero_rollout.py, but each /act request also
-sends a depth_id. For smoke overfit tests with offline depth features, pass a
-DEPTH_VIDEO_ID matching the demonstration video used for training, e.g.
-libero_90_TASK_NAME_demo_0, and timestep t becomes DEPTH_VIDEO_ID_00000t.
+This mirrors ZaMin/LAPA/eval/eval_libero_rollout.py, but targets a policy server
+that computes online depth features through DepthAnythingV2 + Stage-2.5.
 """
 
 import argparse
 import json
 import os
-import tempfile
 import time
+import tempfile
 
 import numpy as np
 import requests
@@ -52,32 +50,9 @@ def get_agentview_image(obs_dict):
     raise KeyError(f"No agentview image in obs keys: {list(obs_dict.keys())}")
 
 
-def get_agentview_depth(obs_dict):
-    preferred = (
-        "agentview_depth",
-        "agentview_depths",
-        "agentview_image_depth",
-        "agentview_image_depths",
-    )
-    for key in preferred:
-        if key in obs_dict:
-            return obs_dict[key]
-    for key in obs_dict:
-        lowered = key.lower()
-        if "agentview" in lowered and "depth" in lowered:
-            return obs_dict[key]
-    raise KeyError(f"No agentview depth in obs keys: {list(obs_dict.keys())}")
-
-
-def query_action(args, image_model, depth_model, instruction, tmp_path, depth_tmp_path, step_index):
+def query_action(args, image_model, instruction, tmp_path):
     Image.fromarray(image_model.astype(np.uint8)).save(tmp_path)
-    depth_id = f"{args.depth_video_id}_{args.depth_start_step + step_index:06d}" if args.depth_video_id else None
     payload = {"image": tmp_path, "instruction": instruction}
-    if depth_id is not None:
-        payload["depth_id"] = depth_id
-    if depth_model is not None:
-        np.save(depth_tmp_path, np.asarray(depth_model))
-        payload["depth_image"] = depth_tmp_path
     last_err = None
     for _ in range(args.connect_retries):
         try:
@@ -85,7 +60,7 @@ def query_action(args, image_model, depth_model, instruction, tmp_path, depth_tm
             data = resp.json()
             action = np.asarray(data, dtype=np.float32)
             if action.shape != (7,):
-                raise ValueError(f"bad action from server for depth_id={depth_id}: {data!r}")
+                raise ValueError(f"bad action from server: {data!r}")
             if args.binarize_gripper:
                 action[6] = 1.0 if action[6] > 0 else -1.0
             return action
@@ -101,8 +76,6 @@ def make_env(bddl_folder, task, img_size):
         "camera_heights": img_size,
         "camera_widths": img_size,
     }
-    if getattr(make_env, "enable_depth", False):
-        env_args["camera_depths"] = True
     env = None
     last_err = None
     for attempt in range(5):
@@ -118,7 +91,7 @@ def make_env(bddl_folder, task, img_size):
     return env
 
 
-def rollout_episode(env, init_state, task, args, tmp_path, depth_tmp_path):
+def rollout_episode(env, init_state, task, args, tmp_path):
     env.reset()
     obs = env.set_init_state(init_state[None])
     for _ in range(5):
@@ -130,12 +103,8 @@ def rollout_episode(env, init_state, task, args, tmp_path, depth_tmp_path):
     for step_index in range(max_steps):
         raw_img = np.asarray(get_agentview_image(obs[0]))
         image_model = raw_img[::-1] if args.flip_for_model else raw_img
-        depth_model = None
-        if args.send_depth_image:
-            raw_depth = np.asarray(get_agentview_depth(obs[0]))
-            depth_model = raw_depth[::-1] if args.flip_depth_for_model else raw_depth
         frames.append(raw_img[::-1] if not args.flip_for_model else raw_img)
-        action = query_action(args, image_model, depth_model, task.language, tmp_path, depth_tmp_path, step_index)
+        action = query_action(args, image_model, task.language, tmp_path)
         obs, _, done, _ = env.step(action[None])
         if bool(done[0]):
             success = True
@@ -177,10 +146,6 @@ def main():
     tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
     tmp_path = tmp.name
     tmp.close()
-    depth_tmp = tempfile.NamedTemporaryFile(suffix=".npy", delete=False)
-    depth_tmp_path = depth_tmp.name
-    depth_tmp.close()
-    make_env.enable_depth = bool(args.send_depth_image)
 
     results = {}
     total_success = 0
@@ -206,7 +171,7 @@ def main():
             task_success = 0
             for ep in range(args.n_eval_per_task):
                 idx = (offset + ep) % init_states.shape[0]
-                success, frames = rollout_episode(env, init_states[idx], task, args, tmp_path, depth_tmp_path)
+                success, frames = rollout_episode(env, init_states[idx], task, args, tmp_path)
                 task_success += int(success)
                 tag = "success" if success else "fail"
                 if success or args.save_failures:
@@ -231,7 +196,6 @@ def main():
         json.dump(results, fout, indent=2)
     print(json.dumps(results["overall"], indent=2))
     os.unlink(tmp_path)
-    os.unlink(depth_tmp_path)
 
 
 def parse_args():
@@ -253,10 +217,6 @@ def parse_args():
     parser.add_argument("--no_binarize_gripper", dest="binarize_gripper", action="store_false")
     parser.add_argument("--connect_retries", type=int, default=60)
     parser.add_argument("--retry_wait", type=float, default=10.0)
-    parser.add_argument("--depth_video_id", type=str, default="")
-    parser.add_argument("--depth_start_step", type=int, default=0)
-    parser.add_argument("--send_depth_image", action="store_true", default=False)
-    parser.add_argument("--flip_depth_for_model", action="store_true", default=False)
     return parser.parse_args()
 
 
