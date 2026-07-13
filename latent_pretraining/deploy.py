@@ -11,6 +11,7 @@ from typing import Any, Dict, Union
 
 import draccus
 import numpy as np
+import requests
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -58,6 +59,7 @@ class LAPAServer:
             depth_feature_manifest: str = "",
             depth_feature_key: str = "auto",
             depth_feature_id_key: str = "auto",
+            stage25_feature_server_url: str = "",
         ) -> Path:
         
         set_random_seed(seed)
@@ -92,6 +94,7 @@ class LAPAServer:
             self.model = ActionSampler(flags)
         self.load_checkpoint= load_checkpoint
         self.depth_index = None
+        self.stage25_feature_server_url = stage25_feature_server_url.rstrip("/")
         if depth_feature_data_dir:
             import torch
 
@@ -150,7 +153,34 @@ class LAPAServer:
 
             prompt = {'image': [image], 'question': instruction}
             depth_id = payload.get("depth_id")
-            if self.depth_index is not None:
+            depth_feature = payload.get("depth_feature")
+            stage25_debug = None
+            if depth_feature is not None:
+                prompt["depth_feature"] = np.asarray(depth_feature, dtype=np.float32)
+            elif self.stage25_feature_server_url and payload.get("depth_image") is not None:
+                response = requests.post(
+                    f"{self.stage25_feature_server_url}/feature",
+                    json={
+                        "image": image_path,
+                        "depth_image": payload["depth_image"],
+                        "instruction": instruction,
+                        "return_debug": payload.get("return_debug", False),
+                    },
+                    timeout=180,
+                )
+                response.raise_for_status()
+                stage25_payload = response.json()
+                if "error" in stage25_payload:
+                    raise RuntimeError(stage25_payload["error"])
+                prompt["depth_feature"] = np.asarray(
+                    stage25_payload["z_depth_feature_pred"], dtype=np.float32
+                )
+                stage25_debug = {
+                    "model_name": stage25_payload.get("model_name"),
+                    "z_depth_shape": stage25_payload.get("z_depth_shape"),
+                    "z_rgb_shape": stage25_payload.get("z_rgb_shape"),
+                }
+            elif self.depth_index is not None:
                 if depth_id is None:
                     raise ValueError("This LAPA-Depth server requires payload['depth_id'].")
                 if depth_id not in self.depth_index:
@@ -170,6 +200,8 @@ class LAPAServer:
                     "action_tokens": np.asarray(action_outputs).tolist(),
                     "depth_id": depth_id,
                 }
+                if stage25_debug is not None:
+                    action["stage25"] = stage25_debug
 
             if double_encode:
                 return JSONResponse(json_numpy.dumps(action))
@@ -227,6 +259,7 @@ class DeployConfig:
     depth_feature_manifest: str = ""
     depth_feature_key: str = "auto"
     depth_feature_id_key: str = "auto"
+    stage25_feature_server_url: str = ""
 
 
 @draccus.wrap()
@@ -250,6 +283,7 @@ def deploy(cfg: DeployConfig) -> None:
         cfg.depth_feature_manifest,
         cfg.depth_feature_key,
         cfg.depth_feature_id_key,
+        cfg.stage25_feature_server_url,
     )
     server.run(cfg.host, port=cfg.port)
 
