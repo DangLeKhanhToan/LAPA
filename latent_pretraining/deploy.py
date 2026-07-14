@@ -49,6 +49,18 @@ class LAPAServer:
         ) -> Path:
         
         set_random_seed(seed)
+        # Read the bin-edge table first: the per-dim bin counts are handed to the
+        # sampler so generation can mask out-of-range action logits (each dim has
+        # len(edges)-1 valid bins, usually fewer than action_vocab_size).
+        self.action_scale_list = []
+        with open(action_scale_file, 'r') as file:
+            reader = csv.reader(file)
+            next(reader)
+            for row in reader:
+                # Convert the string values to float and add them to the csv_data list
+                self.action_scale_list.append([float(value) for value in row if value.strip()])
+        action_dim_sizes = [len(edges) - 1 for edges in self.action_scale_list]
+
         tokenizer = VideoLLaMAConfig.get_tokenizer_config()
         llama = VideoLLaMAConfig.get_default_config()
         tokenizer.vocab_file = vocab_file
@@ -69,6 +81,7 @@ class LAPAServer:
             "llama": llama,
             "load_checkpoint": load_checkpoint,
             "image_aug": img_aug,
+            "action_dim_sizes": action_dim_sizes,
         }
         self.tokens_per_delta = tokens_per_delta
         self.cnt = 0
@@ -76,16 +89,9 @@ class LAPAServer:
 
         if kwargs['tokens_per_delta'] > 0:
             self.model = DeltaActionSampler(flags)
-        else: 
+        else:
             self.model = ActionSampler(flags)
         self.load_checkpoint= load_checkpoint
-        self.action_scale_list = []
-        with open(action_scale_file, 'r') as file:
-            reader = csv.reader(file)
-            next(reader) 
-            for row in reader:
-                # Convert the string values to float and add them to the csv_data list
-                self.action_scale_list.append([float(value) for value in row if value.strip()])
 
     def predict_action(self, payload: Dict[str, Any]) -> str:
         self.cnt +=1
@@ -125,13 +131,16 @@ class LAPAServer:
     def get_averaged_values(self, indices):
         averaged_values = []
         for row_idx, idx in enumerate(indices):
-            try:
-                value1 = self.action_scale_list[row_idx][idx]
-                value2 = self.action_scale_list[row_idx][idx + 1]
-                average = (value1 + value2) / 2
-            except: 
-                print("index out of range")
-                average = 1
+            # The action head has action_vocab_size classes for every dim, but each
+            # dim's bin table can be shorter (qcut drops duplicate edges; gripper has
+            # only 2 bins). A predicted index outside this dim's bins is clamped to
+            # the nearest valid bin instead of silently becoming a bogus action.
+            edges = self.action_scale_list[row_idx]
+            n_bins = len(edges) - 1
+            clamped = min(max(int(idx), 0), n_bins - 1)
+            if clamped != idx:
+                print(f"action dim {row_idx}: predicted bin {idx} outside [0, {n_bins - 1}], clamped to {clamped}")
+            average = (edges[clamped] + edges[clamped + 1]) / 2
             averaged_values.append(average)
         return averaged_values
 

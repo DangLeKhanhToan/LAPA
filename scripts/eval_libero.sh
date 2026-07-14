@@ -28,7 +28,7 @@ ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$absolute_path/datasets/lapa_libero/acti
 VQGAN_CHECKPOINT="${VQGAN_CHECKPOINT:-$absolute_path/lapa_checkpoints/vqgan}"
 VOCAB_FILE="${VOCAB_FILE:-$absolute_path/lapa_checkpoints/tokenizer.model}"
 OUTPUT_DIR="${OUTPUT_DIR:-$absolute_path/outputs/eval_libero}"
-PORT="${PORT:-32820}"
+PORT="${PORT:-32822}"
 SUITES="${SUITES:-libero_spatial libero_object libero_goal libero_10}"
 N_EVAL_PER_TASK="${N_EVAL_PER_TASK:-5}"
 
@@ -129,14 +129,21 @@ trap cleanup EXIT
 # Client retries the connection (default 60 x 10s = 10 min) while the 7B model loads.
 MUJOCO_GL="${MUJOCO_GL:-egl}"
 DEV="${CLIENT_GPU}"
+# Orientation of frames sent to the model — must match the training images:
+#   ROT180_FOR_MODEL=1 -> 180° rotation (OpenVLA-style img[::-1, ::-1]; wins over flip)
+#   FLIP_FOR_MODEL=1   -> vertical flip only (default, preserves previous behavior)
+#   both 0             -> raw env frame
+FLIP_FOR_MODEL="${FLIP_FOR_MODEL:-1}"
+ROT180_FOR_MODEL="${ROT180_FOR_MODEL:-0}"
 CLIENT_ARGS=(
     "$absolute_path/eval/eval_libero_rollout.py"
     --server_url "http://127.0.0.1:${PORT}/act"
     --output_dir "${OUTPUT_DIR}"
     --suites ${SUITES}
     --n_eval_per_task "${N_EVAL_PER_TASK}"
-    --flip_for_model 
 )
+[ "${FLIP_FOR_MODEL}" = "0" ] && CLIENT_ARGS+=(--flip_for_model)
+[ "${ROT180_FOR_MODEL}" = "1" ] && CLIENT_ARGS+=(--rot180_for_model)
 
 if [ "${USE_SINGULARITY}" = "1" ]; then
     echo "[eval] launching LIBERO rollout client in singularity --nv (${MUJOCO_GL})"

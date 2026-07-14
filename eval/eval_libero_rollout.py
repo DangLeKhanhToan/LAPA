@@ -134,8 +134,16 @@ def rollout_episode(env, init_state, task, args, tmp_path):
     max_steps = args.max_steps if args.max_steps > 0 else DEFAULT_MAX_STEPS.get(args._suite, 520)
     for _ in range(max_steps):
         raw_img = np.asarray(get_agentview_image(obs[0]))  # opengl: stored upside-down
-        # Feed the model the SAME orientation as training (raw, unflipped agentview_rgb).
-        image_model = raw_img[::-1] if args.flip_for_model else raw_img
+        # Feed the model the SAME orientation as the training images:
+        #   rot180_for_model -> 180° rotation (OpenVLA-style img[::-1, ::-1])
+        #   flip_for_model   -> vertical flip only
+        #   neither          -> raw frame as returned by the env
+        if args.rot180_for_model:
+            image_model = raw_img[::-1, ::-1]
+        elif args.flip_for_model:
+            image_model = raw_img[::-1]
+        else:
+            image_model = raw_img
         # Save video upright for human viewing.
         frames.append(raw_img[::-1] if not args.flip_for_model else raw_img)
 
@@ -277,6 +285,9 @@ def parse_args():
     p.add_argument('--flip_for_model', action='store_true', default=False,
                    help='Vertically flip frames before sending to the model. Default False '
                         '(training used raw upside-down agentview_rgb).')
+    p.add_argument('--rot180_for_model', action='store_true', default=False,
+                   help='Rotate frames 180 degrees (img[::-1, ::-1], OpenVLA convention) '
+                        'before sending to the model. Takes precedence over --flip_for_model.')
     p.add_argument('--binarize_gripper', action='store_true', default=True,
                    help='Snap gripper action to +/-1 by sign (matches LIBERO +/-1 convention).')
     p.add_argument('--no_binarize_gripper', dest='binarize_gripper', action='store_false')

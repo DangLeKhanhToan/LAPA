@@ -642,6 +642,13 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
             finish_generation = jnp.logical_or(has_reached_max_length, all_sequence_finished)
             return ~finish_generation
 
+        # Per-action-dim valid bin counts (from action_bins.csv, set on the config
+        # by the deploy server). The action head has action_vocab_size classes for
+        # every dim, but each dim only has action_dim_sizes[d] real bins; masking
+        # the excess logits to -inf makes sampling pick the most likely VALID bin
+        # instead of ever emitting an out-of-range index.
+        action_dim_sizes = getattr(self.config, 'action_dim_sizes', None)
+
         def sample_search_body_fn(state):
             """state update fn."""
             prng_key, prng_key_next = jax.random.split(state.prng_key)
@@ -649,6 +656,12 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
 
 
             logits = model_outputs.logits[:, -1]
+
+            if action_dim_sizes is not None and self.config.sample_mode == 'action':
+                sizes = jnp.array(action_dim_sizes, dtype=jnp.int32)
+                pos = (state.cur_len - initial_len) % len(action_dim_sizes)
+                valid = jnp.arange(logits.shape[-1]) < sizes[pos]
+                logits = jnp.where(valid[None, :], logits, -jnp.inf)
 
             # apply min_length, ...
             logits = logits_processor(state.sequences, logits, state.cur_len)
