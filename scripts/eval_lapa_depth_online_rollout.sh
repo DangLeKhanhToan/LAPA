@@ -18,6 +18,8 @@ DEPTH_ANYTHING_CHECKPOINT="${DEPTH_ANYTHING_CHECKPOINT:-$LAPA_ROOT/checkpoints/d
 DEPTH_ANYTHING_ENCODER="${DEPTH_ANYTHING_ENCODER:-vitl}"
 DEPTH_ANYTHING_INPUT_SIZE="${DEPTH_ANYTHING_INPUT_SIZE:-518}"
 DEPTH_ANYTHING_DEVICE="${DEPTH_ANYTHING_DEVICE:-auto}"
+STAGE25_MESH_DIM="${STAGE25_MESH_DIM:-1,2,1,1}"
+POLICY_MESH_DIM="${POLICY_MESH_DIM:-1,-1,1,1}"
 
 FINETUNED_CHECKPOINT="${FINETUNED_CHECKPOINT:-params::$LAPA_ROOT/outputs/lapa_depth_stage3_${SUITE}/streaming_params}"
 ORIGINAL_LAPA_CHECKPOINT="${ORIGINAL_LAPA_CHECKPOINT:-params::$LAPA_ROOT/lapa_checkpoints/pretraining_LAPA_Sth2Sth}"
@@ -48,7 +50,7 @@ export SINGULARITY_TMPDIR="$APPTAINER_TMPDIR"
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.55}"
 export TF_FORCE_GPU_ALLOW_GROWTH="${TF_FORCE_GPU_ALLOW_GROWTH:-true}"
-export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
+export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda,cpu}"
 
 [[ -d "$DEPTH_BRANCH_ROOT" ]] || { echo "ERROR: DEPTH_BRANCH_ROOT not found: $DEPTH_BRANCH_ROOT" >&2; exit 1; }
 [[ -f "$STAGE25_MODEL_CHECKPOINT" ]] || { echo "ERROR: STAGE25_MODEL_CHECKPOINT not found: $STAGE25_MODEL_CHECKPOINT" >&2; exit 1; }
@@ -64,7 +66,7 @@ stage25_args=(
   --original_lapa_checkpoint "$ORIGINAL_LAPA_CHECKPOINT"
   --vqgan_checkpoint "$VQGAN_CHECKPOINT"
   --vocab_file "$VOCAB_FILE"
-  --mesh_dim "1,1,1,1"
+  --mesh_dim "$STAGE25_MESH_DIM"
   --host "127.0.0.1"
   --port "$STAGE25_PORT"
   --depth_anything_repo_dir "$DEPTH_ANYTHING_REPO_DIR"
@@ -82,7 +84,7 @@ policy_args=(
   --vocab_file "$VOCAB_FILE"
   --update_llama_config "$UPDATE_LLAMA_CONFIG"
   --port "$POLICY_PORT"
-  --mesh_dim "1,-1,1,1"
+  --mesh_dim "$POLICY_MESH_DIM"
   --tokens_per_delta 4
   --tokens_per_action 7
   --stage25_feature_server_url "http://127.0.0.1:${STAGE25_PORT}"
@@ -94,8 +96,12 @@ echo "[eval-online] original LAPA: $ORIGINAL_LAPA_CHECKPOINT"
 echo "[eval-online] finetuned policy: $FINETUNED_CHECKPOINT"
 echo "[eval-online] depthanything: $DEPTH_ANYTHING_ENCODER $DEPTH_ANYTHING_CHECKPOINT"
 echo "[eval-online] action bins: $ACTION_SCALE_FILE"
+echo "[eval-online] stage25 visible GPUs: ${STAGE25_CUDA_VISIBLE_DEVICES:-2,3}"
+echo "[eval-online] stage25 mesh_dim: $STAGE25_MESH_DIM"
+echo "[eval-online] policy visible GPUs: ${POLICY_CUDA_VISIBLE_DEVICES:-0}"
+echo "[eval-online] policy mesh_dim: $POLICY_MESH_DIM"
 echo "[eval-online] starting Stage2.5 server on $STAGE25_PORT"
-CUDA_VISIBLE_DEVICES="${STAGE25_CUDA_VISIBLE_DEVICES:-0}" "$MODEL_PY" "${stage25_args[@]}" &
+CUDA_VISIBLE_DEVICES="${STAGE25_CUDA_VISIBLE_DEVICES:-2,3}" "$MODEL_PY" "${stage25_args[@]}" &
 STAGE25_PID=$!
 
 echo "[eval-online] starting policy server on $POLICY_PORT"

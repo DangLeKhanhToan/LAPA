@@ -1,6 +1,6 @@
 # LAPA-Depth Online Rollout with Stage-2.5
 
-This rollout path uses three model components:
+This rollout path uses four model components:
 
 1. DepthAnythingV2 trained on Sth2Sth: `rgb -> depth`
 2. Original LAPA: `rgb + instruction -> z_rgb_feature`
@@ -47,15 +47,26 @@ Use one RGB frame and one instruction. DepthAnythingV2 will generate the depth
 image online.
 
 ```bash
-cd ~/scratch/projects/lapa-depth-modified-levi
+cd /home/linhkastner/lapa/LAPA-depth
 
-export DEPTH_BRANCH_ROOT="$PWD/../Depth_branch"
+export MODEL_PY=/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python
+export LAPA_ROOT="$(pwd -P)"
+export DEPTH_BRANCH_ROOT="$LAPA_ROOT/Depth_branch"
 export STAGE25_MODEL_NAME=model4
-export STAGE25_MODEL_CHECKPOINT="$DEPTH_BRANCH_ROOT/model4.65000.pt"
-export ORIGINAL_LAPA_CHECKPOINT="params::$PWD/lapa_checkpoints/lapa_7b_sth/params"
-export DEPTH_ANYTHING_REPO_DIR="$PWD/third_party/depth_anything_v2"
-export DEPTH_ANYTHING_CHECKPOINT="$PWD/checkpoints/depth_anything_v2_sth2sth/depth_anything_v2_sth2sth.pth"
+export STAGE25_MODEL_CHECKPOINT="$LAPA_ROOT/lapa_checkpoints/depth_model/${STAGE25_MODEL_NAME}.65000.pt"
+export ORIGINAL_LAPA_CHECKPOINT="params::$LAPA_ROOT/lapa_checkpoints/pretraining_LAPA_Sth2Sth"
+export DEPTH_ANYTHING_REPO_DIR="$LAPA_ROOT/third_party/depth_anything_v2"
+export DEPTH_ANYTHING_CHECKPOINT="$LAPA_ROOT/checkpoints/depth_anything_v2_sth2sth/depth_anything_v2_sth2sth.pth"
 export DEPTH_ANYTHING_ENCODER=vitl
+export DEPTH_ANYTHING_INPUT_SIZE=518
+export DEPTH_ANYTHING_DEVICE=cuda
+
+export STAGE25_CUDA_VISIBLE_DEVICES=2,3
+export STAGE25_MESH_DIM=1,2,1,1
+export JAX_PLATFORMS=cuda,cpu
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
+export TF_FORCE_GPU_ALLOW_GROWTH=true
 
 export RGB_IMAGE=/path/to/rgb_step_0.jpg
 export INSTRUCTION="pick up the black bowl between the plate and the ramekin and place it on the plate"
@@ -81,22 +92,102 @@ bash scripts/smoke_stage25_online_feature.sh
 If you want to debug Stage-2.5 with a manually provided depth file, set
 `DEPTH_IMAGE=/path/to/depth.png`; otherwise leave it unset.
 
+## 2.5 A5000 Unit Tests
+
+Run these before a rollout on the 4x RTX 5000 Ada workstation.
+
+Check JAX sees CPU and the sharded GPUs:
+
+```bash
+cd /home/linhkastner/lapa/LAPA-depth/Depth_branch
+
+export MODEL_PY=/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python
+export CUDA_VISIBLE_DEVICES=2,3
+export JAX_PLATFORMS=cuda,cpu
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+
+$MODEL_PY - <<'PY'
+import jax
+print("devices:", jax.devices())
+print("cpu:", jax.devices("cpu"))
+print("gpu:", jax.devices("cuda"))
+PY
+```
+
+Load model4 alone:
+
+```bash
+cd /home/linhkastner/lapa/LAPA-depth/Depth_branch
+
+export MODEL_PY=/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python
+export PYTHONPATH="$PWD:$PWD/laq"
+export CUDA_VISIBLE_DEVICES=2
+
+$MODEL_PY - <<'PY'
+from rollout_stage25_model4 import build_model4
+model = build_model4(checkpoint="../lapa_checkpoints/depth_model/model4.65000.pt", strict=True)
+print("model4 loaded OK")
+PY
+```
+
+Load original LAPA sharded across GPUs 2,3:
+
+```bash
+cd /home/linhkastner/lapa/LAPA-depth/Depth_branch
+
+export MODEL_PY=/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python
+export PYTHONPATH="$PWD:$PWD/laq"
+export CUDA_VISIBLE_DEVICES=2,3
+export JAX_PLATFORMS=cuda,cpu
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.70
+export TF_FORCE_GPU_ALLOW_GROWTH=true
+
+$MODEL_PY - <<'PY'
+from rollout_stage25_model4 import build_lapa
+lapa = build_lapa(
+    tokens_per_delta=4,
+    vqgan_checkpoint="../lapa_checkpoints/vqgan",
+    vocab_file="../lapa_checkpoints/tokenizer.model",
+    load_checkpoint="params::../lapa_checkpoints/pretraining_LAPA_Sth2Sth",
+    mesh_dim="1,2,1,1",
+    dtype="bf16",
+    load_llama_config="7b",
+)
+print("original LAPA loaded OK on GPUs 2,3")
+PY
+```
+
 ## 3. One-Episode Online Rollout
 
 Set the fine-tuned policy checkpoint:
 
 ```bash
-cd ~/scratch/projects/lapa-depth-modified-levi
+cd /home/linhkastner/lapa/LAPA-depth
 
 export SUITE=libero_spatial
-export FINETUNED_CHECKPOINT="params::$PWD/outputs/smoke_overfit_lapa_depth_one_task/streaming_params"
-export ORIGINAL_LAPA_CHECKPOINT="params::$PWD/lapa_checkpoints/lapa_7b_sth/params"
-export DEPTH_BRANCH_ROOT="$PWD/../Depth_branch"
+export MODEL_PY=/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python
+export LIBERO_PY=/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python
+export LAPA_ROOT="$(pwd -P)"
+export FINETUNED_CHECKPOINT="params::$LAPA_ROOT/outputs/smoke_overfit_lapa_depth_one_task/streaming_params"
+export ORIGINAL_LAPA_CHECKPOINT="params::$LAPA_ROOT/lapa_checkpoints/pretraining_LAPA_Sth2Sth"
+export DEPTH_BRANCH_ROOT="$LAPA_ROOT/Depth_branch"
 export STAGE25_MODEL_NAME=model4
-export STAGE25_MODEL_CHECKPOINT="$DEPTH_BRANCH_ROOT/model4.65000.pt"
-export DEPTH_ANYTHING_REPO_DIR="$PWD/third_party/depth_anything_v2"
-export DEPTH_ANYTHING_CHECKPOINT="$PWD/checkpoints/depth_anything_v2_sth2sth/depth_anything_v2_sth2sth.pth"
+export STAGE25_MODEL_CHECKPOINT="$LAPA_ROOT/lapa_checkpoints/depth_model/${STAGE25_MODEL_NAME}.65000.pt"
+export DEPTH_ANYTHING_REPO_DIR="$LAPA_ROOT/third_party/depth_anything_v2"
+export DEPTH_ANYTHING_CHECKPOINT="$LAPA_ROOT/checkpoints/depth_anything_v2_sth2sth/depth_anything_v2_sth2sth.pth"
 export DEPTH_ANYTHING_ENCODER=vitl
+export DEPTH_ANYTHING_INPUT_SIZE=518
+export DEPTH_ANYTHING_DEVICE=cuda
+
+export STAGE25_CUDA_VISIBLE_DEVICES=2,3
+export STAGE25_MESH_DIM=1,2,1,1
+export POLICY_CUDA_VISIBLE_DEVICES=0
+export POLICY_MESH_DIM=1,-1,1,1
+export JAX_PLATFORMS=cuda,cpu
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.55
+export TF_FORCE_GPU_ALLOW_GROWTH=true
 
 export TASK_IDS=0
 export N_EVAL_PER_TASK=1

@@ -80,6 +80,10 @@ while [[ $# -gt 0 ]]; do
       DEPTH_ANYTHING_DEVICE="$2"
       shift 2
       ;;
+    --mesh_dim)
+      STAGE25_MESH_DIM="$2"
+      shift 2
+      ;;
     *)
       echo "ERROR: unknown argument: $1" >&2
       exit 1
@@ -103,6 +107,7 @@ DEPTH_ANYTHING_CHECKPOINT="${DEPTH_ANYTHING_CHECKPOINT:-$LAPA_ROOT/checkpoints/d
 DEPTH_ANYTHING_ENCODER="${DEPTH_ANYTHING_ENCODER:-vitl}"
 DEPTH_ANYTHING_INPUT_SIZE="${DEPTH_ANYTHING_INPUT_SIZE:-518}"
 DEPTH_ANYTHING_DEVICE="${DEPTH_ANYTHING_DEVICE:-auto}"
+STAGE25_MESH_DIM="${STAGE25_MESH_DIM:-1,2,1,1}"
 PORT="${PORT:-32823}"
 OUTPUT_JSON="${OUTPUT_JSON:-$LAPA_ROOT/outputs/stage25_${STAGE25_MODEL_NAME}_smoke.json}"
 
@@ -111,7 +116,7 @@ mkdir -p "$(dirname "$OUTPUT_JSON")"
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.55}"
 export TF_FORCE_GPU_ALLOW_GROWTH="${TF_FORCE_GPU_ALLOW_GROWTH:-true}"
-export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
+export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda,cpu}"
 
 server_args=(
   -m eval.stage25_feature_server
@@ -121,7 +126,7 @@ server_args=(
   --original_lapa_checkpoint "$ORIGINAL_LAPA_CHECKPOINT"
   --vqgan_checkpoint "$VQGAN_CHECKPOINT"
   --vocab_file "$VOCAB_FILE"
-  --mesh_dim "1,1,1,1"
+  --mesh_dim "$STAGE25_MESH_DIM"
   --host "127.0.0.1"
   --port "$PORT"
 )
@@ -140,8 +145,10 @@ else
   )
 fi
 
+echo "[stage25-smoke] stage25 visible GPUs: ${CUDA_VISIBLE_DEVICES:-${STAGE25_CUDA_VISIBLE_DEVICES:-2,3}}"
+echo "[stage25-smoke] stage25 mesh_dim: $STAGE25_MESH_DIM"
 echo "[stage25-smoke] starting server on $PORT"
-CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${STAGE25_CUDA_VISIBLE_DEVICES:-0}}" "$MODEL_PY" "${server_args[@]}" &
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${STAGE25_CUDA_VISIBLE_DEVICES:-2,3}}" "$MODEL_PY" "${server_args[@]}" &
 SERVER_PID=$!
 
 cleanup() {
