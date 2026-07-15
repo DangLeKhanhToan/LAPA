@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import numpy as np
+import requests
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -113,6 +114,7 @@ class Stage25FeatureServer:
 
         self.image_size = args.image_size
         self.model_name = args.model_name
+        self.rgb_feature_server_url = args.rgb_feature_server_url.rstrip("/")
         self.depth_anything: Optional[DepthAnythingV2Runner] = None
         if args.depth_anything_checkpoint:
             self.depth_anything = DepthAnythingV2Runner(
@@ -130,6 +132,7 @@ class Stage25FeatureServer:
                         "model_name": args.model_name,
                         "model_checkpoint": args.model_checkpoint,
                         "original_lapa_checkpoint": args.original_lapa_checkpoint,
+                        "rgb_feature_server_url": self.rgb_feature_server_url,
                         "depth_anything_checkpoint": args.depth_anything_checkpoint,
                         "depth_anything_encoder": args.depth_anything_encoder,
                     }
@@ -138,18 +141,20 @@ class Stage25FeatureServer:
             flush=True,
         )
 
-        lapa = build_lapa(
-            tokens_per_delta=args.tokens_per_delta,
-            vqgan_checkpoint=args.vqgan_checkpoint,
-            vocab_file=args.vocab_file,
-            load_checkpoint=args.original_lapa_checkpoint,
-            image_size=args.image_size,
-            multi_image=args.multi_image,
-            seed=args.seed,
-            mesh_dim=args.mesh_dim,
-            dtype=args.dtype,
-            load_llama_config=args.load_llama_config,
-        )
+        lapa = None
+        if not self.rgb_feature_server_url:
+            lapa = build_lapa(
+                tokens_per_delta=args.tokens_per_delta,
+                vqgan_checkpoint=args.vqgan_checkpoint,
+                vocab_file=args.vocab_file,
+                load_checkpoint=args.original_lapa_checkpoint,
+                image_size=args.image_size,
+                multi_image=args.multi_image,
+                seed=args.seed,
+                mesh_dim=args.mesh_dim,
+                dtype=args.dtype,
+                load_llama_config=args.load_llama_config,
+            )
         model = build_model(
             checkpoint=args.model_checkpoint,
             dim=args.dim,
@@ -164,13 +169,61 @@ class Stage25FeatureServer:
             predict_token_features=bool(args.predict_token_features),
             strict=bool(args.strict),
         )
-        self.extractor = Stage25RolloutFeatureExtractor(
-            lapa=lapa,
-            model4=model,
-            image_size=args.image_size,
-            depth_scale=args.depth_scale,
-            repeat_depth_to_3ch=bool(args.repeat_depth_to_3ch),
+        self.extractor = None
+        if lapa is not None:
+            self.extractor = Stage25RolloutFeatureExtractor(
+                lapa=lapa,
+                model4=model,
+                image_size=args.image_size,
+                depth_scale=args.depth_scale,
+                repeat_depth_to_3ch=bool(args.repeat_depth_to_3ch),
+            )
+        self.model = model
+        self.depth_scale = args.depth_scale
+        self.repeat_depth_to_3ch = bool(args.repeat_depth_to_3ch)
+
+    def _fetch_z_rgb_feature(self, rgb_path: str, instruction: str, return_debug: bool) -> np.ndarray:
+        if not self.rgb_feature_server_url:
+            raise RuntimeError("rgb_feature_server_url is not configured.")
+        response = requests.post(
+            f"{self.rgb_feature_server_url}/rgb_feature",
+            json={
+                "image": rgb_path,
+                "instruction": instruction,
+                "return_debug": return_debug,
+            },
+            timeout=180,
         )
+        response.raise_for_status()
+        payload = response.json()
+        if "error" in payload:
+            raise RuntimeError(payload["error"])
+        return np.asarray(payload["z_rgb_feature"], dtype=np.float32)
+
+    def _depth_to_tensor(self, depth_image: Any):
+        import cv2
+        import torch
+
+        depth = np.asarray(depth_image)
+        if depth.ndim == 3:
+            depth = depth[..., 0] if depth.shape[-1] != 3 else cv2.cvtColor(depth, cv2.COLOR_BGR2GRAY)
+        depth = depth.astype("float32") / float(self.depth_scale)
+        depth = cv2.resize(depth, (self.image_size, self.image_size), interpolation=cv2.INTER_NEAREST)
+        x = torch.from_numpy(depth).float().unsqueeze(0)
+        if self.repeat_depth_to_3ch:
+            x = x.repeat(3, 1, 1)
+        return x
+
+    def _model_depth_feature(self, depth_image: Any, z_rgb_feature: np.ndarray):
+        import torch
+
+        z_rgb = torch.as_tensor(z_rgb_feature, dtype=torch.float32).reshape(1, -1).cuda()
+        depth1 = self._depth_to_tensor(depth_image).unsqueeze(0).cuda().float()
+        with torch.no_grad():
+            return self.model.extract_z_depth_feature(
+                depth1=depth1,
+                z_rgb_features=z_rgb,
+            ).squeeze(0).detach().cpu()
 
     def feature(self, payload: Dict[str, Any]):
         try:
@@ -189,9 +242,23 @@ class Stage25FeatureServer:
                     "No depth_image was provided and DepthAnythingV2 is not configured. "
                     "Set --depth_anything_checkpoint for rollout-time depth generation."
                 )
-            out = self.extractor.step(rgb, instruction, depth)
-            z_depth = out["z_depth_feature_pred"]
-            z_rgb = out["z_rgb_feature"]
+            if payload.get("z_rgb_feature") is not None:
+                z_rgb = np.asarray(payload["z_rgb_feature"], dtype=np.float32)
+                z_depth = self._model_depth_feature(depth, z_rgb)
+                z_rgb_shape = list(z_rgb.shape)
+            elif self.rgb_feature_server_url:
+                z_rgb = self._fetch_z_rgb_feature(
+                    rgb_path,
+                    instruction,
+                    return_debug=payload.get("return_debug", False),
+                )
+                z_depth = self._model_depth_feature(depth, z_rgb)
+                z_rgb_shape = list(z_rgb.shape)
+            else:
+                out = self.extractor.step(rgb, instruction, depth)
+                z_depth = out["z_depth_feature_pred"]
+                z_rgb = out["z_rgb_feature"]
+                z_rgb_shape = list(z_rgb.shape)
 
             result = {
                 "z_depth_feature_pred": z_depth.detach().cpu().float().numpy().tolist(),
@@ -200,7 +267,7 @@ class Stage25FeatureServer:
                 "depth_source": depth_source,
             }
             if payload.get("return_debug", False):
-                result["z_rgb_shape"] = list(z_rgb.shape)
+                result["z_rgb_shape"] = z_rgb_shape
                 result["depth_shape"] = list(np.asarray(depth).shape)
             return JSONResponse(result)
         except Exception:
@@ -245,6 +312,13 @@ def parse_args():
     parser.add_argument("--depth_anything_encoder", type=str, default="vitl", choices=("vits", "vitb", "vitl", "vitg"))
     parser.add_argument("--depth_anything_input_size", type=int, default=518)
     parser.add_argument("--depth_anything_device", type=str, default="auto")
+    parser.add_argument(
+        "--rgb_feature_server_url",
+        type=str,
+        default="",
+        help="Optional URL for a separate baseline LAPA RGB feature server. "
+        "When set, this process does not load original LAPA.",
+    )
     return parser.parse_args()
 
 
