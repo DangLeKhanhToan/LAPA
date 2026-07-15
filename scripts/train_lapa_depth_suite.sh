@@ -84,6 +84,8 @@ EVAL_LOG_FREQ="${EVAL_LOG_FREQ:-100}"
 SAVE_MODEL_FREQ="${SAVE_MODEL_FREQ:-$TOTAL_STEPS}"
 SAVE_MILESTONE_FREQ="${SAVE_MILESTONE_FREQ:-0}"
 RUNTIME_LOG_STEPS="${RUNTIME_LOG_STEPS:-${runtime_log_steps:-3}}"
+AUTORESUME="${AUTORESUME:-False}"
+SAVE_OPTIMIZER_STATE="${SAVE_OPTIMIZER_STATE:-False}"
 
 args=(
   -u -m latent_pretraining.train
@@ -134,8 +136,8 @@ args=(
   --train_dataset.json_delta_action_dataset.depth_feature_key="$DEPTH_FEATURE_KEY"
   --train_dataset.json_delta_action_dataset.depth_feature_id_key="$DEPTH_ID_KEY"
   --train_dataset.json_delta_action_dataset.depth_feature_dim="$DEPTH_FEATURE_DIM"
-  --checkpointer.save_optimizer_state=False
-  --autoresume=False
+  --checkpointer.save_optimizer_state="$SAVE_OPTIMIZER_STATE"
+  --autoresume="$AUTORESUME"
   --logger.append_uuid=False
   --logger.online="$WANDB_ONLINE"
   --logger.project_id="$PROJECT_ID"
@@ -163,6 +165,9 @@ echo "[train-depth-suite] batch_size: $BATCH_SIZE"
 echo "[train-depth-suite] tokenizer_processes: 1"
 echo "[train-depth-suite] log_freq: $LOG_FREQ"
 echo "[train-depth-suite] save_model_freq: $SAVE_MODEL_FREQ"
+echo "[train-depth-suite] save_milestone_freq: $SAVE_MILESTONE_FREQ"
+echo "[train-depth-suite] autoresume: $AUTORESUME"
+echo "[train-depth-suite] save_optimizer_state: $SAVE_OPTIMIZER_STATE"
 
 python3 "${args[@]}"
 

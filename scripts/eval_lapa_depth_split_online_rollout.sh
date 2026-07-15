@@ -46,6 +46,7 @@ TASK_IDS="${TASK_IDS:-0}"
 N_EVAL_PER_TASK="${N_EVAL_PER_TASK:-1}"
 MAX_STEPS="${MAX_STEPS:-80}"
 INIT_OFFSET="${INIT_OFFSET:-0}"
+PROGRESS_FREQ="${PROGRESS_FREQ:-25}"
 ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')}"
 UPDATE_LLAMA_CONFIG="${UPDATE_LLAMA_CONFIG:-dict(action_vocab_size=${ACTION_VOCAB_SIZE},delta_vocab_size=8,sample_mode='text',theta=50000000,max_sequence_length=32768,scan_attention=False,scan_query_chunk_size=128,scan_key_chunk_size=128,scan_mlp=False,scan_mlp_chunk_size=8192,scan_layers=True)}"
 
@@ -106,6 +107,8 @@ echo "[split-rollout] RGB baseline GPU: $RGB_CUDA_VISIBLE_DEVICES mesh=$RGB_MESH
 echo "[split-rollout] Stage2.5 GPU: $STAGE25_CUDA_VISIBLE_DEVICES port=$STAGE25_PORT"
 echo "[split-rollout] Policy GPU: $POLICY_CUDA_VISIBLE_DEVICES mesh=$POLICY_MESH_DIM port=$POLICY_PORT"
 echo "[split-rollout] Simulator EGL GPU: $MUJOCO_EGL_DEVICE_ID"
+echo "[split-rollout] Task IDs: $TASK_IDS"
+echo "[split-rollout] Eval per task: $N_EVAL_PER_TASK | max_steps=$MAX_STEPS | progress_freq=$PROGRESS_FREQ"
 
 CUDA_VISIBLE_DEVICES="$RGB_CUDA_VISIBLE_DEVICES" "$MODEL_PY" -m eval.lapa_rgb_feature_server \
   --stage25_bundle_dir "$DEPTH_BRANCH_ROOT" \
@@ -164,6 +167,7 @@ MUJOCO_EGL_DEVICE_ID="$MUJOCO_EGL_DEVICE_ID" PYTHONPATH="$LIBERO_REPO:$PROJECT_D
   --task_ids $TASK_IDS \
   --n_eval_per_task "$N_EVAL_PER_TASK" \
   --max_steps "$MAX_STEPS" \
-  --init_offset "$INIT_OFFSET"
+  --init_offset "$INIT_OFFSET" \
+  --progress_freq "$PROGRESS_FREQ"
 
 echo "[split-rollout] wrote results/videos to $OUTPUT_DIR"

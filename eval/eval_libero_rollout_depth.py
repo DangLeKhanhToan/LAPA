@@ -58,6 +58,10 @@ def query_action(args, image_model, instruction, tmp_path):
         try:
             resp = requests.post(args.server_url, json=payload, timeout=180)
             data = resp.json()
+            if isinstance(data, dict) and "error" in data:
+                raise RuntimeError(data["error"])
+            if isinstance(data, str):
+                raise RuntimeError(f"policy server returned string response: {data!r}")
             action = np.asarray(data, dtype=np.float32)
             if action.shape != (7,):
                 raise ValueError(f"bad action from server: {data!r}")
@@ -91,7 +95,7 @@ def make_env(bddl_folder, task, img_size):
     return env
 
 
-def rollout_episode(env, init_state, task, args, tmp_path):
+def rollout_episode(env, init_state, task, args, tmp_path, task_id, ep):
     env.reset()
     obs = env.set_init_state(init_state[None])
     for _ in range(5):
@@ -100,12 +104,31 @@ def rollout_episode(env, init_state, task, args, tmp_path):
     frames = []
     success = False
     max_steps = args.max_steps if args.max_steps > 0 else DEFAULT_MAX_STEPS.get(args._suite, 520)
+    episode_start = time.time()
+    print(
+        f"[{args._suite}] task {task_id} ep {ep} start | max_steps={max_steps} | "
+        f"instruction={task.language!r}",
+        flush=True,
+    )
     for step_index in range(max_steps):
         raw_img = np.asarray(get_agentview_image(obs[0]))
         image_model = raw_img[::-1] if args.flip_for_model else raw_img
         frames.append(raw_img[::-1] if not args.flip_for_model else raw_img)
         action = query_action(args, image_model, task.language, tmp_path)
         obs, _, done, _ = env.step(action[None])
+        if args.progress_freq > 0 and (
+            (step_index + 1) % args.progress_freq == 0 or step_index == 0
+        ):
+            elapsed = time.time() - episode_start
+            steps_done = step_index + 1
+            sec_per_step = elapsed / max(steps_done, 1)
+            eta = sec_per_step * max(max_steps - steps_done, 0)
+            print(
+                f"[{args._suite}] task {task_id} ep {ep} step {steps_done}/{max_steps} | "
+                f"elapsed={elapsed/60:.1f}m | eta={eta/60:.1f}m | "
+                f"sec_step={sec_per_step:.2f}",
+                flush=True,
+            )
         if bool(done[0]):
             success = True
             break
@@ -171,7 +194,8 @@ def main():
             task_success = 0
             for ep in range(args.n_eval_per_task):
                 idx = (offset + ep) % init_states.shape[0]
-                success, frames = rollout_episode(env, init_states[idx], task, args, tmp_path)
+                ep_start = time.time()
+                success, frames = rollout_episode(env, init_states[idx], task, args, tmp_path, task_id, ep)
                 task_success += int(success)
                 tag = "success" if success else "fail"
                 if success or args.save_failures:
@@ -180,7 +204,11 @@ def main():
                         os.path.join(args.output_dir, suite, task_name, f"ep{ep}_{tag}.mp4"),
                         args.fps,
                     )
-                print(f"[{suite}] task {task_id} ({task.language!r}) ep {ep}: {tag}")
+                print(
+                    f"[{suite}] task {task_id} ({task.language!r}) ep {ep}: {tag} | "
+                    f"episode_time={(time.time() - ep_start)/60:.1f}m",
+                    flush=True,
+                )
             env.close()
             rate = task_success / args.n_eval_per_task
             results[suite]["tasks"][task_name] = {"success_rate": rate, "n_eval": args.n_eval_per_task}
@@ -217,6 +245,7 @@ def parse_args():
     parser.add_argument("--no_binarize_gripper", dest="binarize_gripper", action="store_false")
     parser.add_argument("--connect_retries", type=int, default=60)
     parser.add_argument("--retry_wait", type=float, default=10.0)
+    parser.add_argument("--progress_freq", type=int, default=25)
     return parser.parse_args()
 
 
