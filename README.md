@@ -1,238 +1,249 @@
-# LAPA-Depth: Stage-3 Offline Fine-Tuning and Online LIBERO Rollout
+# LAPA-Depth
 
-This repository is a modified LAPA codebase for the depth-injection Stage-3
-pipeline. It supports:
+LAPA-Depth extends LAPA with depth-aware features for robot policy fine-tuning and evaluation in LIBERO. The repository provides scripts for:
 
-- offline Stage-3 fine-tuning with precomputed Stage-2.5 depth features;
-- online rollout with RGB observations, DepthAnythingV2, Stage-2.5 model4, and a
-  fine-tuned LAPA-Depth policy;
-- split-server rollout so the two LAPA 7B models do not OOM on one GPU.
+- Stage-3 offline fine-tuning with precomputed depth features;
+- online depth-feature extraction from RGB observations;
+- LIBERO rollout evaluation;
+- split-service inference to reduce GPU memory usage;
+- checkpoint inspection and data-alignment validation.
 
-The original LAPA README has been replaced by this team runbook. Use this file
-as the first checklist when setting up a new machine or reproducing training and
-evaluation.
+## Repository
 
-## Pipeline Summary
-
-### Offline Training
-
-Training uses raw RGB images, instructions, action-bin labels, and offline
-1024-D depth features:
-
-```text
-RGB image + instruction + offline z_depth_feature(1024)
-    -> fine-tune LAPA language model + action head
-    -> robot action token bins
+```bash
+git clone https://github.com/DangLeKhanhToan/LAPA.git
+cd LAPA
 ```
 
-Frozen modules:
+## Method Overview
+
+### Offline fine-tuning
+
+During Stage-3 training, the policy receives an RGB observation, a language instruction, an action label, and a precomputed 1024-dimensional depth feature.
 
 ```text
-LAPA vision encoder, VQGAN, Stage-2.5 depth feature source
+RGB observation + instruction + offline depth feature
+    -> LAPA-Depth policy
+    -> discretized robot action
 ```
 
-Trainable modules:
+The depth features are expected to be generated beforehand by the Stage-2.5 depth branch.
+
+### Online rollout
+
+During evaluation, the depth feature is generated from the current RGB observation instead of being loaded from disk.
 
 ```text
-LAPA language model, depth_action_proj, action/action-token head
+LIBERO RGB observation
+    -> RGB feature extractor
+    -> depth estimator
+    -> Stage-2.5 depth feature model
+    -> LAPA-Depth policy
+    -> continuous robot action
 ```
 
-### Online Rollout
+The inference components can run as separate services on different GPUs. This is recommended when the complete pipeline does not fit on one GPU.
 
-At rollout time we do not load offline depth features. We compute depth features
-online:
+## Repository Structure
+
+The main files used by the depth-aware pipeline are:
 
 ```text
-LIBERO simulator RGB
-  -> fine-tuned LAPA-Depth policy server
-      -> Stage2.5 feature server
-          -> baseline LAPA RGB feature server
-          -> DepthAnythingV2
-          -> model4
-      -> 1024-D depth feature
-  -> 7-D robot action
+latent_pretraining/
+  train.py                         Stage-3 training entry point
+  deploy.py                        LAPA-Depth policy server
+
+eval/
+  lapa_rgb_feature_server.py       RGB feature extraction service
+  stage25_feature_server.py        Online depth-feature service
+  eval_libero_rollout_depth.py     LIBERO rollout evaluator
+
+scripts/
+  train_lapa_depth_suite.sh
+  eval_lapa_depth_split_online_rollout.sh
+  eval_lapa_depth_split_multi_suite.sh
+  inspect_lapa_depth_alignment.sh
+  inspect_lapa_depth_policy_split.sh
+  smoke_stage25_online_feature.sh
 ```
 
-Recommended 4-GPU allocation on 30GB RTX 5000 Ada:
-
-```text
-GPU 1: fine-tuned LAPA-Depth policy
-GPU 2: DepthAnythingV2 + Stage-2.5 model4
-GPU 3: baseline LAPA RGB feature server
-GPU 0: avoid if unstable, or use for simulator only
-```
-
-## Repository Layout
-
-Important modified files:
-
-```text
-latent_pretraining/train.py                 Stage-3 training entrypoint
-latent_pretraining/deploy.py                fine-tuned policy HTTP server
-eval/lapa_rgb_feature_server.py             baseline LAPA -> 4096-D RGB feature server
-eval/stage25_feature_server.py              DepthAnythingV2 + model4 -> 1024-D depth feature server
-eval/eval_libero_rollout_depth.py           LIBERO rollout client with progress logs
-scripts/train_lapa_depth_suite.sh           offline Stage-3 training wrapper
-scripts/eval_lapa_depth_split_online_rollout.sh
-scripts/eval_lapa_depth_split_multi_suite.sh
-scripts/inspect_lapa_depth_alignment.sh
-scripts/smoke_stage25_online_feature.sh
-```
-
-External bundle expected inside this repo:
+Additional depth modules are expected under:
 
 ```text
 Depth_branch/
-  laq/rollout_stage25_model4.py
-  latent_pretraining/inference_update_jsonl_train.py
+third_party/depth_anything_v2/
 ```
 
-## Environment Setup
+## Requirements
 
-Example setup on the cluster:
+A Linux machine with an NVIDIA GPU is recommended.
+
+Typical requirements include:
+
+- Python 3.10;
+- CUDA-compatible PyTorch;
+- JAX with GPU support;
+- LIBERO and MuJoCo;
+- DepthAnythingV2;
+- model checkpoints for LAPA, Stage-2.5, and DepthAnythingV2.
+
+Create an isolated environment and install the project dependencies:
 
 ```bash
-cd ~/scratch/projects
-git clone <repo-url> lapa-depth-modified-levi
-cd lapa-depth-modified-levi
+python3 -m venv .venv
+source .venv/bin/activate
 
-python3 -m venv ~/scratch/venvs/lapa-depth
-source ~/scratch/venvs/lapa-depth/bin/activate
-pip install --upgrade pip
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-On Linh workstation we usually use:
+Alternatively, use a Conda environment:
 
 ```bash
-export MODEL_PY=/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python
-export LIBERO_PY=/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python
+conda create -n lapa-depth python=3.10 -y
+conda activate lapa-depth
+pip install -r requirements.txt
 ```
 
-On A2AP we usually use:
+GPU packages may need to be installed separately to match the CUDA version available on the machine.
 
-```bash
-source ~/scratch/venvs/lapa-depth/bin/activate
-```
+## Configure the Project
 
-## LIBERO Setup
-
-Clone or place LIBERO under:
-
-```text
-datasets/LIBERO
-```
-
-Then expose it during rollout:
+From the repository root, define:
 
 ```bash
 export LAPA_ROOT="$(pwd -P)"
+export PYTHONPATH="$LAPA_ROOT:${PYTHONPATH:-}"
+```
+
+The provided scripts read most configuration from environment variables, allowing paths and hardware settings to be changed without editing the source code.
+
+## Install LIBERO
+
+Place or clone LIBERO inside the repository:
+
+```text
+datasets/LIBERO/
+```
+
+Then configure the Python path:
+
+```bash
 export LIBERO_REPO="$LAPA_ROOT/datasets/LIBERO"
 export PYTHONPATH="$LIBERO_REPO:$LAPA_ROOT:${PYTHONPATH:-}"
 ```
 
-The rollout wrapper already sets:
+Follow the official LIBERO installation instructions to install its dependencies and download the required BDDL files, initial states, and demonstration data.
 
-```bash
-LIBERO_REPO="${LIBERO_REPO:-$PROJECT_DIR/datasets/LIBERO}"
+Verify that LIBERO can locate its resources through its standard path configuration, including:
+
+```python
+get_libero_path("bddl_files")
+get_libero_path("init_states")
 ```
 
-LIBERO data/checkpoints should provide BDDL files and init states via LIBERO's
-standard `get_libero_path("bddl_files")` mechanism.
+## Data and Checkpoint Layout
 
-## Required Data and Checkpoints
-
-Expected local layout:
+The exact directory names are configurable, but the following structure is recommended:
 
 ```text
-lapa_checkpoints/
-  tokenizer.model
-  vqgan
-  lapa_7b_sth/params                         # base LAPA for training
-  pretraining_LAPA_Sth2Sth                   # baseline LAPA for online RGB feature
-  depth_model/model4.65000.pt                # Stage-2.5 model4
-  stage_3_depth_inject/lapa-depth_stage3/
-    128_batch_spatial
-    128_batch_object
-    128_batch_goal
-    streaming_params                         # current fallback for libero_90 if no 128_batch_90
-
-datasets/
-  lapa_libero_v2/
-    images/
-    libero_spatial.jsonl
-    libero_object.jsonl
-    libero_goal.jsonl
-    libero_90.jsonl
-    action_bins_libero_spatial.csv
-    action_bins_libero_object.csv
-    action_bins_libero_goal.csv
-    action_bins_libero_90.csv
-  features_depth_branch/
-    stage25_libero_features_model4/
-      libero_spatial/stage25_model4/z_depth_train_shard0/*.pt
-      libero_object/stage25_model4/z_depth_train_shard0/*.pt
-      libero_goal/stage25_model4/z_depth_train_shard0/*.pt
-      libero_90/stage25_model4/z_depth_train_shard0/*.pt
-
-Depth_branch/
-third_party/depth_anything_v2/
-checkpoints/depth_anything_v2_sth2sth/depth_anything_v2_sth2sth.pth
+LAPA/
+├── lapa_checkpoints/
+│   ├── tokenizer.model
+│   ├── vqgan/
+│   ├── base_lapa/
+│   ├── rgb_feature_lapa/
+│   ├── depth_model/
+│   │   └── model4.pt
+│   └── stage3/
+│       ├── libero_spatial/
+│       ├── libero_object/
+│       ├── libero_goal/
+│       └── libero_90/
+│
+├── datasets/
+│   ├── LIBERO/
+│   ├── lapa_libero/
+│   │   ├── images/
+│   │   ├── libero_spatial.jsonl
+│   │   ├── libero_object.jsonl
+│   │   ├── libero_goal.jsonl
+│   │   ├── libero_90.jsonl
+│   │   └── action_bins_*.csv
+│   └── features_depth_branch/
+│       └── stage25_libero_features_model4/
+│           ├── libero_spatial/
+│           ├── libero_object/
+│           ├── libero_goal/
+│           └── libero_90/
+│
+├── Depth_branch/
+├── third_party/
+│   └── depth_anything_v2/
+└── checkpoints/
+    └── depth_anything_v2.pth
 ```
 
-DepthAnythingV2 Sth2Sth checkpoint uses the `vitl` encoder.
+Required assets include:
 
-## Download / Install DepthAnythingV2
+1. a base LAPA checkpoint for Stage-3 fine-tuning;
+2. a baseline LAPA checkpoint for online RGB feature extraction;
+3. a trained Stage-2.5 depth feature model;
+4. a DepthAnythingV2 checkpoint;
+5. LIBERO training JSONL files and action-bin files;
+6. precomputed depth features for offline training;
+7. fine-tuned LAPA-Depth checkpoints for evaluation.
 
-If the repo and checkpoint are not present:
+## Configure Dataset Paths
+
+For a LIBERO suite, define the training files explicitly:
 
 ```bash
-cd /path/to/LAPA-depth
-export DEPTH_ANYTHING_CKPT_LOCAL=/path/to/depth_anything_v2_sth2sth.pth
-bash scripts/download_depthanythingv2_sth2sth.sh
+export SUITE=libero_spatial
+export LAPA_JSONL="$LAPA_ROOT/datasets/lapa_libero/${SUITE}.jsonl"
+export ACTION_BINS="$LAPA_ROOT/datasets/lapa_libero/action_bins_${SUITE}.csv"
+export DEPTH_DATA_DIR="$LAPA_ROOT/datasets/features_depth_branch/stage25_libero_features_model4/${SUITE}/stage25_model4/z_depth_train_shard0"
 ```
 
-If downloading from a URL:
+Supported suite names normally include:
 
-```bash
-export DEPTH_ANYTHING_CKPT_URL=https://.../depth_anything_v2_sth2sth.pth
-bash scripts/download_depthanythingv2_sth2sth.sh
+```text
+libero_spatial
+libero_object
+libero_goal
+libero_90
 ```
 
-## Inspect Depth Feature Alignment
+## Validate Depth-Feature Alignment
 
-Before training, verify JSONL rows match offline depth features:
+Before training, verify that the dataset rows and precomputed depth features use matching sample identifiers.
 
 ```bash
-cd ~/scratch/projects/lapa-depth-modified-levi
-
-export LAPA_JSONL=datasets/lapa_libero_v2/libero_spatial.jsonl
-export DEPTH_DATA_DIR=datasets/features_depth_branch/stage25_libero_features_model4/libero_spatial/stage25_model4/z_depth_train_shard0
+export SUITE=libero_spatial
+export LAPA_JSONL="$LAPA_ROOT/datasets/lapa_libero/${SUITE}.jsonl"
+export DEPTH_DATA_DIR="$LAPA_ROOT/datasets/features_depth_branch/stage25_libero_features_model4/${SUITE}/stage25_model4/z_depth_train_shard0"
 export DEPTH_MANIFEST="$DEPTH_DATA_DIR/z_depth_train_shard0_model4_manifest.json"
 
 bash scripts/inspect_lapa_depth_alignment.sh
 ```
 
-Expected:
+A correctly prepared dataset should report values similar to:
 
 ```text
 match_rate: 1.0
 depth_shape: [1024]
 ```
 
-Some suites have depth ids with an extra `_depth` token. The current alignment
-code handles this normalization.
+Do not start a long training run until the match rate is correct.
 
-## Offline Stage-3 Training
+## Stage-3 Fine-Tuning
 
-Train one suite:
+The training wrapper accepts configuration through environment variables.
 
 ```bash
-cd ~/scratch/projects/lapa-depth-modified-levi
-source ~/scratch/venvs/lapa-depth/bin/activate
-
 export LAPA_ROOT="$(pwd -P)"
 export SUITE=libero_spatial
+
 export TOTAL_STEPS=20000
 export BATCH_SIZE=128
 export MESH_DIM='!-1,4,1,1'
@@ -244,34 +255,82 @@ export AUTORESUME=True
 export SAVE_OPTIMIZER_STATE=True
 
 export WANDB_ONLINE=False
-export EXPERIMENT_ID="128_batch_model_2_${SUITE}"
+export EXPERIMENT_ID="lapa_depth_${SUITE}"
 
-SUITE="$SUITE" bash scripts/train_lapa_depth_suite.sh
+bash scripts/train_lapa_depth_suite.sh
 ```
 
-The wrapper automatically resolves:
+The wrapper should resolve or receive paths for:
 
 ```text
-datasets/lapa_libero_v2/${SUITE}.jsonl
-datasets/lapa_libero_v2/action_bins_${SUITE}.csv
-datasets/features_depth_branch/stage25_libero_features_model4/${SUITE}/stage25_model4/...
+training JSONL
+action-bin CSV
+offline depth features
+base LAPA checkpoint
+tokenizer and VQGAN checkpoints
+output directory
 ```
 
-## PBS Training Script
+Review `scripts/train_lapa_depth_suite.sh` before running it and override any default paths that do not match the local machine.
 
-Use this as a resume-safe PBS template:
+### Multi-GPU configuration
+
+`MESH_DIM` must match the number of devices allocated to the job. For example:
 
 ```bash
-#!/bin/bash
-#PBS -N training_libero_depth
-#PBS -q normal
-#PBS -P 11714283
-#PBS -l select=1:ncpus=112:ngpus=4
-#PBS -l walltime=24:00:00
+export MESH_DIM='!-1,4,1,1'   # four devices
+```
+
+A larger global batch size does not necessarily improve throughput. Measure step time and GPU utilization when changing batch size, data-loader workers, or device count.
+
+## Resume Training
+
+To resume an interrupted run, use the same:
+
+```text
+SUITE
+EXPERIMENT_ID
+output directory
+model configuration
+```
+
+Enable:
+
+```bash
+export AUTORESUME=True
+export SAVE_OPTIMIZER_STATE=True
+```
+
+A full resume requires both model parameters and training state. If only model parameters are available, the run can usually warm-start, but optimizer state, scheduler state, and dataset position may be reset.
+
+Inspect saved state with:
+
+```bash
+find "outputs/$EXPERIMENT_ID" -maxdepth 3 \
+  \( -name 'streaming_params' \
+  -o -name 'streaming_train_state' \
+  -o -name 'metadata.pkl' \
+  -o -name 'dataset.pkl' \) \
+  -print
+```
+
+## Example Scheduler Script
+
+The project can be launched through Slurm, PBS, or another scheduler. The following generic PBS example must be adapted to the target cluster:
+
+```bash
+#!/usr/bin/env bash
+#PBS -N lapa_depth
+#PBS -q <queue-name>
+#PBS -P <project-id>
+#PBS -l select=1:ncpus=<cpu-count>:ngpus=<gpu-count>
+#PBS -l walltime=<hours>:00:00
 #PBS -j oe
 
-cd ~/scratch/projects/lapa-depth-modified-levi
-source ~/scratch/venvs/lapa-depth/bin/activate
+set -Eeuo pipefail
+
+cd /path/to/LAPA
+source .venv/bin/activate
 
 export LAPA_ROOT="$(pwd -P)"
 export SUITE="${SUITE:-libero_spatial}"
@@ -279,291 +338,310 @@ export SUITE="${SUITE:-libero_spatial}"
 export TOTAL_STEPS=20000
 export BATCH_SIZE=128
 export MESH_DIM='!-1,4,1,1'
+export LR=2e-5
 
-export LOG_FREQ=1
-export EVAL_STEPS=0
 export SAVE_MODEL_FREQ=200
 export SAVE_MILESTONE_FREQ=1000
 export AUTORESUME=True
 export SAVE_OPTIMIZER_STATE=True
-export RUNTIME_LOG_STEPS=3
 export WANDB_ONLINE=False
+export EXPERIMENT_ID="lapa_depth_${SUITE}"
 
-export EXPERIMENT_ID="128_batch_model_2_${SUITE}"
-
-echo "Job ID: $PBS_JOBID"
-echo "Suite: $SUITE"
-echo "Experiment: $EXPERIMENT_ID"
-echo "Host: $(hostname)"
 nvidia-smi
-
-SUITE="$SUITE" bash scripts/train_lapa_depth_suite.sh
+bash scripts/train_lapa_depth_suite.sh
 ```
 
-Submit:
+Submit a suite by passing it as an environment variable using the syntax supported by the cluster.
+
+## Online LIBERO Rollout
+
+### Why split the services?
+
+The complete online pipeline may contain:
+
+- the fine-tuned LAPA-Depth policy;
+- a baseline LAPA model for RGB features;
+- DepthAnythingV2;
+- the Stage-2.5 depth model;
+- LIBERO and MuJoCo.
+
+Running everything on one device can exceed GPU memory. The split rollout launches independent services and assigns them to separate GPUs.
+
+### Recommended GPU assignment
+
+For a machine with at least three usable GPUs:
 
 ```bash
-qsub -v SUITE=libero_spatial train_lapa_depth.pbs
-qsub -v SUITE=libero_object  train_lapa_depth.pbs
-qsub -v SUITE=libero_goal    train_lapa_depth.pbs
-qsub -v SUITE=libero_90      train_lapa_depth.pbs
+export POLICY_CUDA_VISIBLE_DEVICES=0
+export STAGE25_CUDA_VISIBLE_DEVICES=1
+export RGB_CUDA_VISIBLE_DEVICES=2
 ```
 
-Resume after walltime by submitting the same suite and same `EXPERIMENT_ID`.
-Exact resume requires both:
+The simulator can use one of these GPUs or another available device:
 
 ```bash
-AUTORESUME=True
-SAVE_OPTIMIZER_STATE=True
+export MUJOCO_EGL_DEVICE_ID=0
 ```
 
-If only `streaming_params` exists, training can warm-start from weights but
-optimizer state, dataset position, and LR schedule are reset.
+Adjust the mapping according to available memory and utilization.
 
-## Check Saved Training State
+### Configure model checkpoints
 
 ```bash
-cd ~/scratch/projects/lapa-depth-modified-levi
-
-for EXP in 128_batch_model_2_libero_spatial 128_batch_model_2_libero_object 128_batch_model_2_libero_goal 128_batch_model_2_libero_90; do
-  echo "==== $EXP ===="
-  find outputs/$EXP -maxdepth 2 -type d \( -name "streaming_train_state" -o -name "streaming_params" \) 2>/dev/null
-  find outputs/$EXP -maxdepth 2 -type f \( -name "metadata.pkl" -o -name "dataset.pkl" \) 2>/dev/null
-done
+export ORIGINAL_LAPA_CHECKPOINT="params::$LAPA_ROOT/lapa_checkpoints/rgb_feature_lapa"
+export FINETUNED_CHECKPOINT="params::$LAPA_ROOT/lapa_checkpoints/stage3/libero_spatial"
 ```
 
-## Online Rollout: Split Services
-
-The current reliable rollout path starts three servers:
-
-```text
-1. eval.lapa_rgb_feature_server       baseline LAPA -> 4096-D RGB feature
-2. eval.stage25_feature_server        DepthAnythingV2 + model4 -> 1024-D depth feature
-3. latent_pretraining.deploy          fine-tuned LAPA-Depth -> 7-D robot action
-```
-
-Run one suite:
+Configure DepthAnythingV2:
 
 ```bash
-cd /home/linhkastner/lapa/LAPA-depth
-
-export MODEL_PY=/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python
-export LIBERO_PY=/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python
-export LAPA_ROOT="$(pwd -P)"
-
-export ORIGINAL_LAPA_CHECKPOINT="params::$LAPA_ROOT/lapa_checkpoints/pretraining_LAPA_Sth2Sth"
-
-export POLICY_CUDA_VISIBLE_DEVICES=1
-export STAGE25_CUDA_VISIBLE_DEVICES=2
-export RGB_CUDA_VISIBLE_DEVICES=3
-export MUJOCO_EGL_DEVICE_ID=2
-
 export DEPTH_ANYTHING_ENCODER=vitl
 export DEPTH_ANYTHING_INPUT_SIZE=518
 export DEPTH_ANYTHING_DEVICE=cuda
+```
 
+Optional memory settings:
+
+```bash
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.80
 export TF_FORCE_GPU_ALLOW_GROWTH=true
 export JAX_PLATFORMS=cuda,cpu
+```
+
+### Evaluate one suite
+
+```bash
+export MODEL_PY="$(which python)"
+export LIBERO_PY="$(which python)"
 
 export SUITE=libero_spatial
-export FINETUNED_CHECKPOINT="params::$LAPA_ROOT/lapa_checkpoints/stage_3_depth_inject/lapa-depth_stage3/128_batch_spatial"
 export TASK_IDS="0 1 2 3 4 5 6 7 8 9"
 export N_EVAL_PER_TASK=10
 export MAX_STEPS=500
 export PROGRESS_FREQ=25
-export OUTPUT_DIR="$LAPA_ROOT/outputs/eval_split_${SUITE}_10tasks_10eps"
+export OUTPUT_DIR="$LAPA_ROOT/outputs/eval_${SUITE}"
 
 bash scripts/eval_lapa_depth_split_online_rollout.sh
 ```
 
-Task ids must be space-separated:
+Task IDs must be separated by spaces:
 
 ```bash
-export TASK_IDS="0 1 2 3 4 5 6 7 8 9"
+export TASK_IDS="0 1 2"
 ```
 
-Do not use comma-separated ids:
+Do not use a comma-separated string unless the evaluation script explicitly supports it.
+
+### Evaluate multiple suites
 
 ```bash
-export TASK_IDS=0,1,2,3,4,5,6,7,8,9  # wrong
-```
-
-## Online Rollout: Multiple Suites
-
-Sequentially evaluate four suites:
-
-```bash
-cd /home/linhkastner/lapa/LAPA-depth
-
-export MODEL_PY=/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python
-export LIBERO_PY=/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python
-export LAPA_ROOT="$(pwd -P)"
-export ORIGINAL_LAPA_CHECKPOINT="params::$LAPA_ROOT/lapa_checkpoints/pretraining_LAPA_Sth2Sth"
-
-export POLICY_CUDA_VISIBLE_DEVICES=1
-export STAGE25_CUDA_VISIBLE_DEVICES=2
-export RGB_CUDA_VISIBLE_DEVICES=3
-export MUJOCO_EGL_DEVICE_ID=2
-
 export SUITES="libero_spatial libero_object libero_goal libero_90"
 export TASK_IDS="0 1 2 3 4 5 6 7 8 9"
 export N_EVAL_PER_TASK=10
 export MAX_STEPS=500
 export PROGRESS_FREQ=25
-export OUTPUT_PREFIX="eval_split_10tasks_10eps"
+export OUTPUT_PREFIX="eval_lapa_depth"
 
 bash scripts/eval_lapa_depth_split_multi_suite.sh
 ```
 
-Default checkpoint mapping in the multi-suite wrapper:
+Check the checkpoint mapping inside the multi-suite wrapper before evaluation. Each suite should point to the intended fine-tuned checkpoint.
+
+## Outputs
+
+Training outputs are normally stored under:
 
 ```text
-libero_spatial -> lapa-depth_stage3/128_batch_spatial
-libero_object  -> lapa-depth_stage3/128_batch_object
-libero_goal    -> lapa-depth_stage3/128_batch_goal
-libero_90      -> lapa-depth_stage3/128_batch_90 if present, else lapa-depth_stage3/streaming_params
+outputs/<experiment-id>/
 ```
 
-## Rollout Logs and Results
-
-Server logs:
+Evaluation outputs may include:
 
 ```text
-outputs/server_logs/rgb_feature_gpu*.log
-outputs/server_logs/stage25_split_gpu*.log
-outputs/server_logs/policy_gpu*.log
+outputs/<evaluation-name>/results.json
+outputs/<evaluation-name>/<suite>/<task>/ep*_success.mp4
+outputs/<evaluation-name>/<suite>/<task>/ep*_fail.mp4
 ```
 
-Rollout output:
+Service logs are normally written under:
 
 ```text
-outputs/<OUTPUT_DIR>/results.json
-outputs/<OUTPUT_DIR>/<suite>/<task_name>/ep*_success.mp4
-outputs/<OUTPUT_DIR>/<suite>/<task_name>/ep*_fail.mp4
+outputs/server_logs/
 ```
 
-The evaluator prints progress every `PROGRESS_FREQ` simulator steps:
-
-```text
-[libero_spatial] task 0 ep 0 step 25/500 | elapsed=... | eta=...
-```
+The exact paths depend on the wrapper configuration.
 
 ## Smoke Tests
 
-Check a Stage2.5 online feature:
+### Test online depth-feature extraction
 
 ```bash
-export RGB_IMAGE=/path/to/step_0.jpg
-export INSTRUCTION="pick up the black bowl between the plate and the ramekin and place it on the plate"
+export RGB_IMAGE=/path/to/example.jpg
+export INSTRUCTION="pick up the object and place it in the target location"
+
 bash scripts/smoke_stage25_online_feature.sh \
   --rgb_image "$RGB_IMAGE" \
   --instruction "$INSTRUCTION" \
   --port 32823
 ```
 
-Inspect checkpoint parameter groups:
+### Inspect a fine-tuned checkpoint
 
 ```bash
-export FINETUNED_CHECKPOINT="params::$LAPA_ROOT/lapa_checkpoints/stage_3_depth_inject/lapa-depth_stage3/128_batch_spatial"
+export FINETUNED_CHECKPOINT="params::$LAPA_ROOT/lapa_checkpoints/stage3/libero_spatial"
 bash scripts/inspect_lapa_depth_policy_split.sh
 ```
 
-Expected depth-injection additions are tiny compared with the LAPA trunk:
+Expected depth-aware parameter groups may include:
 
 ```text
-depth_action_proj/kernel: (1024, 4096)
-action_head/kernel:       (4096, 256)
+depth_action_proj
+action_head
+action-token head
 ```
 
 ## Troubleshooting
 
-### `argument --task_ids: invalid int value: '0,1,2'`
+### Invalid task ID
 
-Use spaces:
+Example error:
+
+```text
+argument --task_ids: invalid int value
+```
+
+Use a space-separated list:
 
 ```bash
 export TASK_IDS="0 1 2"
 ```
 
-### Policy server returns `"error"`
+### Policy server returns an error
 
-Inspect server logs:
+Inspect the logs from all services:
 
 ```bash
-tail -200 outputs/server_logs/policy_gpu*.log
-tail -200 outputs/server_logs/stage25_split_gpu*.log
-tail -200 outputs/server_logs/rgb_feature_gpu*.log
+tail -n 200 outputs/server_logs/policy*.log
+tail -n 200 outputs/server_logs/stage25*.log
+tail -n 200 outputs/server_logs/rgb_feature*.log
 ```
 
-Most common cause: Stage2.5 returned HTTP 500, often from DepthAnything CUDA
-timeout.
+The policy request may fail because an upstream feature service failed, timed out, or ran out of GPU memory.
 
-### CUDA timeout on GPU0
+### CUDA out-of-memory error
 
-GPU0 has repeatedly shown:
+Use separate GPUs for:
 
 ```text
-CUDA error: the launch timed out and was terminated
+LAPA-Depth policy
+baseline LAPA RGB feature model
+DepthAnythingV2 and Stage-2.5 model
 ```
 
-Avoid GPU0 for model servers when possible:
+Also consider:
 
 ```bash
-export POLICY_CUDA_VISIBLE_DEVICES=1
-export STAGE25_CUDA_VISIBLE_DEVICES=2
-export RGB_CUDA_VISIBLE_DEVICES=3
-export MUJOCO_EGL_DEVICE_ID=2
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.70
 ```
 
-Kill stale servers:
+Reduce the fraction further when multiple frameworks share a device.
+
+### CUDA timeout or unstable device
+
+Move the affected service to another GPU and verify that no stale process is still using the device.
+
+Stop old services with:
 
 ```bash
-pkill -u "$USER" -f "latent_pretraining.deploy" || true
-pkill -u "$USER" -f "eval.stage25_feature_server" || true
-pkill -u "$USER" -f "eval.lapa_rgb_feature_server" || true
-pkill -u "$USER" -f "eval_libero_rollout_depth" || true
+pkill -u "$USER" -f 'latent_pretraining.deploy' || true
+pkill -u "$USER" -f 'eval.stage25_feature_server' || true
+pkill -u "$USER" -f 'eval.lapa_rgb_feature_server' || true
+pkill -u "$USER" -f 'eval_libero_rollout_depth' || true
 ```
 
-### Stage2.5 OOM
+### Rollout appears to be stuck
 
-Do not run baseline LAPA, DepthAnythingV2, and model4 in one process/GPU. Use the
-split rollout scripts. The old bundled Stage2.5 path can OOM on 30GB GPUs.
+The first episode can be slow because JAX/XLA, PyTorch, DepthAnythingV2, and MuJoCo may initialize or compile kernels on first use.
 
-### Rollout seems stuck
-
-The first episode may be slow because JAX/XLA, PyTorch CUDA, DepthAnythingV2,
-and MuJoCo/EGL warm up. The evaluator now prints heartbeat logs every
-`PROGRESS_FREQ` steps.
-
-### `libero_90` checkpoint looks smaller
-
-Check actual checkpoint folders:
+Check:
 
 ```bash
-du -sh lapa_checkpoints/stage_3_depth_inject/lapa-depth_stage3/*
-find lapa_checkpoints/stage_3_depth_inject/lapa-depth_stage3 -maxdepth 2 -type d -print
+nvidia-smi
 ```
 
-If `128_batch_90` is missing, the multi-suite script uses root
-`streaming_params` as fallback. Verify this is the intended `libero_90`
-checkpoint before reporting results.
+Then monitor the service logs and confirm that heartbeat messages continue to appear.
 
-## Notes on Speed
+### Dataset and depth features do not match
 
-Online LAPA-Depth rollout is slower than baseline LAPA because each action
-requires:
+Run:
+
+```bash
+bash scripts/inspect_lapa_depth_alignment.sh
+```
+
+Common causes include:
+
+- different ordering between the JSONL and feature manifest;
+- inconsistent sample IDs;
+- an incorrect suite path;
+- missing feature files;
+- features generated from a different dataset version.
+
+### Checkpoint appears incomplete
+
+Inspect directory sizes and contents:
+
+```bash
+du -sh lapa_checkpoints/stage3/*
+find lapa_checkpoints/stage3 -maxdepth 3 -type d -print
+```
+
+Confirm that the selected path contains the expected parameter tree and belongs to the correct LIBERO suite.
+
+## Performance Notes
+
+Online LAPA-Depth rollout is expected to be slower than a baseline LAPA rollout because each simulator step may require:
 
 ```text
-fine-tuned LAPA-Depth policy
-+ baseline LAPA RGB feature inference
-+ DepthAnythingV2 vitl
-+ model4
-+ HTTP calls and image reads
-+ simulator step
+LAPA-Depth policy inference
++ baseline LAPA RGB feature extraction
++ DepthAnythingV2 inference
++ Stage-2.5 depth feature inference
++ inter-process or HTTP communication
++ simulator execution
 ```
 
-The baseline rollout usually only runs one LAPA policy inference per simulator
-step. The split design is slower but prevents OOM and is faithful to the online
-depth pipeline.
+The split-service design prioritizes reproducibility and memory safety over minimum latency.
+
+For performance analysis, record:
+
+- average simulator-step time;
+- policy latency;
+- RGB feature latency;
+- depth feature latency;
+- GPU utilization and memory;
+- service errors and retries.
+
+## Reproducibility Checklist
+
+Before reporting results, record:
+
+- commit hash;
+- Python and CUDA versions;
+- PyTorch and JAX versions;
+- GPU model and GPU count;
+- LIBERO version;
+- suite and task IDs;
+- checkpoint paths or checkpoint identifiers;
+- batch size and training steps;
+- number of evaluation episodes;
+- random seeds;
+- success-rate calculation method.
+
+## Citation and License
+
+This repository builds on LAPA, LIBERO, DepthAnythingV2, and related research code. Follow the licenses and citation requirements of all upstream projects and downloaded checkpoints.
+
+Add project-specific citation information here when a technical report or paper becomes available.
