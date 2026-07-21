@@ -1,13 +1,17 @@
 """
 Convert LIBERO HDF5 demonstration files to LAPA-compatible JSONL format.
 
+Each suite is processed as a whole (no train/test split) and gets its own
+action-bin table, computed the same way finetune_preprocess.py does it:
+qcut over ALL records of that suite, with a binary gripper override.
+
 Output layout:
   {output_dir}/images/{suite}/{task_stem}/demo_{i}/step_{t}.jpg
-  {output_dir}/{suite}_train.jsonl
-  {output_dir}/{suite}_test.jsonl
-  {output_dir}/all_train.jsonl   (shuffled merge of all train splits)
-  {output_dir}/all_test.jsonl
-  {output_dir}/action_bins.csv   (bin edges for deployment server)
+  {output_dir}/{suite}.jsonl
+  {output_dir}/action_bins_{suite}.csv
+
+The number of columns of each action_bins_{suite}.csv is the value to use as
+--llama.action_vocab_size when fine-tuning on that suite.
 
 Usage:
   python data/process_libero.py \
@@ -17,7 +21,6 @@ Usage:
 
 import argparse
 import json
-import random
 from pathlib import Path
 
 import h5py
@@ -25,16 +28,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
-
-# Demo index ranges for each suite.
-# None means that split is empty for this suite.
-SUITE_SPLITS = {
-    'libero_goal':    (range(45), range(45, 50)),
-    'libero_object':  (range(45), range(45, 50)),
-    'libero_spatial': (range(45), range(45, 50)),
-    'libero_90':      (range(50), None),   # entire suite = train (for LIBERO-100)
-    'libero_10':      (None, range(50)),   # entire suite = test  (for LIBERO-100)
-}
+SUITES = ['libero_goal', 'libero_object', 'libero_spatial', 'libero_90', 'libero_10']
 
 
 def assign_bin(data_point, bins):
@@ -54,15 +48,17 @@ def process_hdf5(hdf5_path, suite, output_dir, camera):
     Save images and collect raw records from one HDF5 file.
 
     Returns:
-        task_stem (str): filename stem used as image subdirectory name.
-        records (list): tuples of (demo_idx, step, instruction, raw_action, img_rel_path).
+        records (list): tuples of (instruction, raw_action, img_rel_path).
     """
     task_stem = Path(hdf5_path).stem
     records = []
 
     with h5py.File(hdf5_path, 'r') as f:
         problem_info = json.loads(f['data'].attrs['problem_info'])
-        instruction = problem_info['language_instruction']
+        task = problem_info['language_instruction']
+        # Raw conversation-style instruction, same shape finetune_preprocess.py
+        # expects in conversations[0].value before it strips '<image>\n'.
+        instruction = f'<image>\nWhat action should the robot take to `{task}`'
         num_demos = int(f['data'].attrs['num_demos'])
 
         for demo_idx in range(num_demos):
@@ -77,14 +73,54 @@ def process_hdf5(hdf5_path, suite, output_dir, camera):
             for t in range(T):
                 img_rel = f'images/{suite}/{task_stem}/demo_{demo_idx}/step_{t}.jpg'
                 img_abs = output_dir / img_rel
-                # LIBERO stores frames in OpenGL convention (origin at bottom-left),
-                # so flip vertically to get upright images. Always overwrite so a
-                # re-run replaces images saved by older versions of this script.
-                Image.fromarray(images_arr[t][::-1]).save(img_abs)
+                # Do NOT flip: save frames exactly as stored in the HDF5.
+                # Always overwrite so a re-run replaces images from older versions.
+                Image.fromarray(images_arr[t]).save(img_abs)
 
-                records.append((demo_idx, t, instruction, actions[t].tolist(), img_rel))
+                records.append((instruction, actions[t].tolist(), img_rel))
 
-    return task_stem, records
+    return records
+
+
+def compute_suite_bins(records, discretize_bins):
+    """Per-dim qcut over all records of one suite (finetune_preprocess.py style)."""
+    total_list = [[] for _ in range(7)]
+    for (_inst, raw_action, _img) in records:
+        for dim in range(7):
+            total_list[dim].append(raw_action[dim])
+
+    total_bin = []
+    for dim, individual_list in enumerate(total_list):
+        values = np.asarray(individual_list, dtype=np.float64)
+        # Bin the raw action values as-is (nothing added / no jitter). Since the
+        # raw values are already coarsely discretized, qcut with duplicates='drop'
+        # may return fewer than discretize_bins bins for some dims — that's fine.
+        _, bins = pd.qcut(
+            pd.Series(values), discretize_bins,
+            labels=False, retbins=True, duplicates='drop',
+        )
+        total_bin.append(bins)
+        print(f"  dim {dim}: {len(bins)-1} bins  [{bins[0]:.4f}, {bins[-1]:.4f}]")
+        print(f"    edges: {np.array2string(np.asarray(bins), precision=8, threshold=300, max_line_width=120)}")
+
+    # Gripper override: LIBERO gripper is in {-1, 1}; treat as binary open/close.
+    # (finetune_preprocess.py uses int(action[6]), which would yield -1 here,
+    # so re-bin instead: bin 0 -> open (-1), bin 1 -> close (+1).)
+    total_bin[6] = np.array([-1.5, 0.0, 1.5])
+    return total_bin
+
+
+def make_record(instruction, raw_action, img_rel, total_bin):
+    """Build one jsonl record, mirroring finetune_preprocess.py's output fields."""
+    action_bins = [str(assign_bin(raw_action[i], total_bin[i])) for i in range(7)]
+    instruction = instruction.replace('<image>\n', '')
+    return {
+        'instruction': f'<s> You are a helpful assistant. USER: {instruction} ASSISTANT:',
+        'image': img_rel,
+        'raw_actions': raw_action,
+        'action': action_bins,
+        'fields': '[instruction],[vision],action',
+    }
 
 
 def main(args):
@@ -92,11 +128,9 @@ def main(args):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    suites = args.suites if args.suites else list(SUITE_SPLITS.keys())
-    random.seed(args.seed)
+    suites = args.suites if args.suites else SUITES
+    summary = []
 
-    # ── Step 1: Extract images and collect records ────────────────────────────
-    suite_records = {}  # suite -> {task_stem -> [records]}
     for suite in suites:
         suite_dir = libero_root / suite
         if not suite_dir.exists():
@@ -104,98 +138,41 @@ def main(args):
             continue
         hdf5_files = sorted(suite_dir.glob('*.hdf5'))
         print(f"\n[{suite}] {len(hdf5_files)} task files")
-        suite_records[suite] = {}
+
+        # ── Step 1: extract images and collect raw records ────────────────────
+        records = []
         for hdf5_path in hdf5_files:
             print(f"  {hdf5_path.name} ...", flush=True)
-            task_stem, records = process_hdf5(hdf5_path, suite, output_dir, args.camera)
-            suite_records[suite][task_stem] = records
+            records.extend(process_hdf5(hdf5_path, suite, output_dir, args.camera))
 
-    # ── Step 2: Compute global action bins from training demos only ───────────
-    dim_lists = [[] for _ in range(7)]
-    for suite in suites:
-        if suite not in suite_records:
-            continue
-        train_range, _ = SUITE_SPLITS[suite]
-        if train_range is None:
-            continue
-        for records in suite_records[suite].values():
-            for (demo_idx, _step, _inst, raw_action, _img) in records:
-                if demo_idx in train_range:
-                    for dim in range(7):
-                        dim_lists[dim].append(raw_action[dim])
+        # ── Step 2: per-suite action bins over ALL records of this suite ──────
+        print(f"[{suite}] computing action bins from {len(records):,} records ...")
+        total_bin = compute_suite_bins(records, args.discretize_bins)
 
-    print("\nComputing action bins ...")
-    total_bin = []
-    for dim in range(7):
-        series = pd.Series(dim_lists[dim])
-        _, bins = pd.qcut(
-            series, args.discretize_bins, labels=False, retbins=True, duplicates='drop'
-        )
-        total_bin.append(bins)
-        print(f"  dim {dim}: {len(bins)-1} bins  [{bins[0]:.4f}, {bins[-1]:.4f}]")
+        bins_path = output_dir / f'action_bins_{suite}.csv'
+        pd.DataFrame(total_bin).to_csv(bins_path, index=False)
+        vocab = max(len(b) for b in total_bin)
+        print(f"[{suite}] saved {bins_path.name} (action_vocab_size = {vocab})")
 
-    # Gripper override: LIBERO gripper is in [-1, 1]; treat as binary open/close.
-    # bin 0 -> [-1.5, 0.0) -> open (-1)
-    # bin 1 -> [0.0,  1.5) -> close (1)
-    total_bin[6] = np.array([-1.5, 0.0, 1.5])
+        # ── Step 3: write one jsonl for the whole suite ────────────────────────
+        jsonl_path = output_dir / f'{suite}.jsonl'
+        with open(jsonl_path, 'w') as fout:
+            for (instruction, raw_action, img_rel) in records:
+                rec = make_record(instruction, raw_action, img_rel, total_bin)
+                fout.write(json.dumps(rec) + '\n')
+        print(f"[{suite}] wrote {len(records):>9,} records -> {jsonl_path.name}")
 
-    pd.DataFrame(total_bin).to_csv(output_dir / 'action_bins.csv', index=False)
-    print("Saved action_bins.csv")
+        summary.append((suite, len(records), vocab))
 
-    # ── Step 3 & 4: Write per-suite JSONL files and combined files ────────────
-    def make_record(instruction, raw_action, img_rel):
-        action_bins = [str(assign_bin(raw_action[i], total_bin[i])) for i in range(7)]
-        # Prompt must match the inference sampler (DeltaActionSampler.__call__), which wraps
-        # the task language as: "... USER: What action should the robot take to `{task}` ASSISTANT: ..."
-        # Training/eval prompt consistency is critical for the fine-tuned action head.
-        return {
-            'instruction': f'<s> You are a helpful assistant. USER: What action should the robot take to `{instruction}` ASSISTANT:',
-            'image': img_rel,
-            'raw_actions': raw_action,
-            'action': action_bins,
-            'fields': '[instruction],[vision],action',
-        }
-
-    all_train, all_test = [], []
-
-    for suite in suites:
-        if suite not in suite_records:
-            continue
-        train_range, test_range = SUITE_SPLITS[suite]
-        train_out, test_out = [], []
-
-        for records in suite_records[suite].values():
-            for (demo_idx, _step, instruction, raw_action, img_rel) in records:
-                rec = make_record(instruction, raw_action, img_rel)
-                if train_range is not None and demo_idx in train_range:
-                    train_out.append(rec)
-                elif test_range is not None and demo_idx in test_range:
-                    test_out.append(rec)
-
-        def write_jsonl(path, records_list):
-            with open(path, 'w') as fout:
-                for rec in records_list:
-                    fout.write(json.dumps(rec) + '\n')
-            print(f"  Wrote {len(records_list):>8,} records → {Path(path).name}")
-
-        print(f"\n[{suite}]")
-        if train_out:
-            write_jsonl(output_dir / f'{suite}_train.jsonl', train_out)
-            all_train.extend(train_out)
-        if test_out:
-            write_jsonl(output_dir / f'{suite}_test.jsonl', test_out)
-            all_test.extend(test_out)
-
-    print("\n[combined]")
-    random.shuffle(all_train)
-    write_jsonl(output_dir / 'all_train.jsonl', all_train)
-    write_jsonl(output_dir / 'all_test.jsonl', all_test)
-    print("\nDone.")
+    print("\n=== summary ===")
+    for suite, n, vocab in summary:
+        print(f"  {suite:<16} records={n:>9,}  action_vocab_size={vocab}")
+    print("Done.")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Convert LIBERO HDF5 demos to LAPA JSONL format.'
+        description='Convert LIBERO HDF5 demos to LAPA JSONL format (per-suite, no split).'
     )
     parser.add_argument(
         '--libero_root', type=str, default='datasets/libero_raw',
@@ -203,10 +180,10 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--output_dir', type=str, default='datasets/lapa_libero',
-        help='Output dir for images and JSONL files.',
+        help='Output dir for images, per-suite jsonl and per-suite bins CSV.',
     )
     parser.add_argument(
-        '--suites', type=str, nargs='+', choices=list(SUITE_SPLITS.keys()),
+        '--suites', type=str, nargs='+', choices=SUITES,
         help='Suites to process (default: all 5).',
     )
     parser.add_argument(
@@ -218,6 +195,5 @@ if __name__ == '__main__':
         choices=['agentview_rgb', 'eye_in_hand_rgb'],
         help='Camera view key to extract from each timestep.',
     )
-    parser.add_argument('--seed', type=int, default=42, help='Random seed for shuffling.')
     args = parser.parse_args()
     main(args)
