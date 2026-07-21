@@ -144,8 +144,12 @@ def rollout_episode(env, init_state, task, args, tmp_path):
             image_model = raw_img[::-1]
         else:
             image_model = raw_img
-        # Save video upright for human viewing.
-        frames.append(raw_img[::-1] if not args.flip_for_model else raw_img)
+        # Video orientation is tied to rot180_for_model so the saved video is
+        # always human-upright:
+        #   rot180_for_model=1 -> model already got the 180° rotation, so save the
+        #                         raw env frame as-is (no postprocess).
+        #   rot180_for_model=0 -> model got the raw frame, so rotate the video 180°.
+        frames.append(raw_img if args.rot180_for_model else raw_img[::-1, ::-1])
 
         action = query_action(
             args.server_url, image_model, task.language, tmp_path,

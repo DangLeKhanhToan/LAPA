@@ -53,13 +53,28 @@ export SINGULARITY_TMPDIR="$APPTAINER_TMPDIR"
 # CUDA_VISIBLE_DEVICES / MUJOCO_EGL_DEVICE_ID still take precedence.
 # Any other value (default: unset) -> original behavior, both default to GPU 0.
 GPU_MODE="${GPU_MODE:-}"
+# Space-separated GPU indices utilize must never pick (e.g. "0" — GPU 0 hosts
+# the Xorg display on this machine, so its watchdog kills long JAX kernels
+# with CUDA_ERROR_LAUNCH_TIMEOUT). Explicit CUDA_VISIBLE_DEVICES still wins.
+GPU_EXCLUDE="${GPU_EXCLUDE:-}"
 SERVER_GPU="${CUDA_VISIBLE_DEVICES:-0}"
 CLIENT_GPU="${MUJOCO_EGL_DEVICE_ID:-0}"
 if [ "${GPU_MODE}" = "utilize" ]; then
     mapfile -t GPUS_BY_FREE < <(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits \
         | sort -t, -k2,2 -rn | awk -F, '{gsub(/ /,"",$1); print $1}')
+    if [ -n "${GPU_EXCLUDE}" ]; then
+        FILTERED=()
+        for g in "${GPUS_BY_FREE[@]}"; do
+            keep=1
+            for x in ${GPU_EXCLUDE}; do
+                if [ "$g" = "$x" ]; then keep=0; break; fi
+            done
+            if [ "$keep" = "1" ]; then FILTERED+=("$g"); fi
+        done
+        GPUS_BY_FREE=("${FILTERED[@]}")
+    fi
     if [ "${#GPUS_BY_FREE[@]}" -eq 0 ]; then
-        echo "ERROR: GPU_MODE=utilize but nvidia-smi listed no GPUs"; exit 1
+        echo "ERROR: GPU_MODE=utilize found no usable GPUs (GPU_EXCLUDE='${GPU_EXCLUDE}')"; exit 1
     fi
     SERVER_GPU="${CUDA_VISIBLE_DEVICES:-${GPUS_BY_FREE[0]}}"
     CLIENT_GPU="${MUJOCO_EGL_DEVICE_ID:-${GPUS_BY_FREE[1]:-${GPUS_BY_FREE[0]}}}"
