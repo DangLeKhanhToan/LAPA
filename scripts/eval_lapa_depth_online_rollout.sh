@@ -21,9 +21,32 @@ DEPTH_ANYTHING_DEVICE="${DEPTH_ANYTHING_DEVICE:-auto}"
 STAGE25_MESH_DIM="${STAGE25_MESH_DIM:-1,2,1,1}"
 POLICY_MESH_DIM="${POLICY_MESH_DIM:-1,-1,1,1}"
 
-FINETUNED_CHECKPOINT="${FINETUNED_CHECKPOINT:-params::$LAPA_ROOT/outputs/lapa_depth_stage3_${SUITE}/streaming_params}"
+STAGE3_CKPT_ROOT="${STAGE3_CKPT_ROOT:-$LAPA_ROOT/lapa_checkpoints/stage_3_depth_inject/lapa-depth_stage3}"
+suite_suffix="${SUITE#libero_}"
+if [[ -z "${FINETUNED_CHECKPOINT:-}" ]]; then
+  if [[ -d "$STAGE3_CKPT_ROOT/128_batch_${suite_suffix}" ]]; then
+    FINETUNED_CHECKPOINT="params::$STAGE3_CKPT_ROOT/128_batch_${suite_suffix}"
+  elif [[ -d "$STAGE3_CKPT_ROOT/128_batch_${SUITE}" ]]; then
+    FINETUNED_CHECKPOINT="params::$STAGE3_CKPT_ROOT/128_batch_${SUITE}"
+  elif [[ -d "$LAPA_ROOT/outputs/lapa_depth_stage3_${SUITE}/streaming_params" ]]; then
+    FINETUNED_CHECKPOINT="params::$LAPA_ROOT/outputs/lapa_depth_stage3_${SUITE}/streaming_params"
+  else
+    FINETUNED_CHECKPOINT="params::$STAGE3_CKPT_ROOT/128_batch_${suite_suffix}"
+  fi
+fi
 ORIGINAL_LAPA_CHECKPOINT="${ORIGINAL_LAPA_CHECKPOINT:-params::$LAPA_ROOT/lapa_checkpoints/pretraining_LAPA_Sth2Sth}"
-ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$DATA_ROOT/action_bins_${SUITE}.csv}"
+if [[ -z "${ACTION_SCALE_FILE:-}" ]]; then
+  for candidate in \
+    "$DATA_ROOT/action_bins_${SUITE}.csv" \
+    "$LAPA_ROOT/datasets/lapa_libero_v2/action_bins_${SUITE}.csv" \
+    "$LAPA_ROOT/datasets/lapa_libero/action_bins_${SUITE}.csv"; do
+    if [[ -f "$candidate" ]]; then
+      ACTION_SCALE_FILE="$candidate"
+      break
+    fi
+  done
+  ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$DATA_ROOT/action_bins_${SUITE}.csv}"
+fi
 VQGAN_CHECKPOINT="${VQGAN_CHECKPOINT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
 VOCAB_FILE="${VOCAB_FILE:-$LAPA_ROOT/lapa_checkpoints/tokenizer.model}"
 STAGE25_MODEL_NAME="${STAGE25_MODEL_NAME:-model4}"

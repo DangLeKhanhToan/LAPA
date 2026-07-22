@@ -15,13 +15,14 @@ OUTPUT_PREFIX="${OUTPUT_PREFIX:-eval_split}"
 CKPT_ROOT="${CKPT_ROOT:-$LAPA_ROOT/lapa_checkpoints/stage_3_depth_inject/lapa-depth_stage3}"
 
 checkpoint_for_suite() {
+  local suffix="${1#libero_}"
   case "$1" in
-    libero_spatial) echo "$CKPT_ROOT/128_batch_spatial" ;;
-    libero_object) echo "$CKPT_ROOT/128_batch_object" ;;
-    libero_goal) echo "$CKPT_ROOT/128_batch_goal" ;;
+    libero_spatial|libero_object|libero_goal) echo "$CKPT_ROOT/128_batch_${suffix}" ;;
     libero_90)
       if [[ -d "$CKPT_ROOT/128_batch_90" ]]; then
         echo "$CKPT_ROOT/128_batch_90"
+      elif [[ -d "$CKPT_ROOT/128_batch_libero_90" ]]; then
+        echo "$CKPT_ROOT/128_batch_libero_90"
       else
         echo "$CKPT_ROOT/streaming_params"
       fi
