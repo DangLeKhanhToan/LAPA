@@ -112,8 +112,22 @@ def rollout_episode(env, init_state, task, args, tmp_path, task_id, ep):
     )
     for step_index in range(max_steps):
         raw_img = np.asarray(get_agentview_image(obs[0]))
-        image_model = raw_img[::-1] if args.flip_for_model else raw_img
-        frames.append(raw_img[::-1] if not args.flip_for_model else raw_img)
+        # Feed the model the SAME orientation as the training images:
+        #   rot180_for_model -> 180° rotation (OpenVLA-style img[::-1, ::-1])
+        #   flip_for_model   -> vertical flip only
+        #   neither          -> raw frame as returned by the env
+        if getattr(args, 'rot180_for_model', False):
+            image_model = raw_img[::-1, ::-1]
+        elif args.flip_for_model:
+            image_model = raw_img[::-1]
+        else:
+            image_model = raw_img
+        # Video orientation is tied to rot180_for_model so the saved video is
+        # always human-upright:
+        #   rot180_for_model=1 -> model already got the 180° rotation, so save the
+        #                         raw env frame as-is (no postprocess).
+        #   rot180_for_model=0 -> model got the raw frame, so rotate the video 180°.
+        frames.append(raw_img if getattr(args, 'rot180_for_model', False) else raw_img[::-1, ::-1])
         action = query_action(args, image_model, task.language, tmp_path)
         obs, _, done, _ = env.step(action[None])
         if args.progress_freq > 0 and (
@@ -241,6 +255,8 @@ def parse_args():
     parser.add_argument("--save_failures", action="store_true", default=True)
     parser.add_argument("--no_save_failures", dest="save_failures", action="store_false")
     parser.add_argument("--flip_for_model", action="store_true", default=False)
+    parser.add_argument("--rot180_for_model", action="store_true", default=False,
+                        help="Rotate frames 180 degrees (img[::-1, ::-1], OpenVLA convention) before sending to the model.")
     parser.add_argument("--binarize_gripper", action="store_true", default=True)
     parser.add_argument("--no_binarize_gripper", dest="binarize_gripper", action="store_false")
     parser.add_argument("--connect_retries", type=int, default=60)

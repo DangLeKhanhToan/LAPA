@@ -153,6 +153,11 @@ class DeltaActionSampler:
             eos_token_id=self.tokenizer.eos_token_id,
         ))
         llama_config.update(dict(mesh_dim=self.FLAGS.mesh_dim))
+        # Valid bin count per action dim (from action_bins.csv, via deploy.py).
+        # Used by _sample_vision to mask out-of-range action logits.
+        action_dim_sizes = getattr(self.FLAGS, 'action_dim_sizes', None)
+        if action_dim_sizes:
+            llama_config.update(dict(action_dim_sizes=tuple(action_dim_sizes)))
         self.config = llama_config
 
         with jax.default_device(jax.devices("cpu")[0]):

@@ -696,6 +696,19 @@ class FlaxVideoLLaMAForCausalLM(FlaxVideoLLaMAPreTrainedModel):
             # apply top_p, top_k, temperature
             logits = logits_warper(logits, logits, state.cur_len)
 
+            # Per-action-dim valid bin counts (from action_bins.csv, set on the config
+            # by the deploy server). The action head has action_vocab_size classes for
+            # every dim, but each dim only has action_dim_sizes[d] real bins; masking
+            # the excess logits to -inf makes sampling pick the most likely VALID bin
+            # instead of ever emitting an out-of-range index.
+            action_dim_sizes = getattr(self.config, 'action_dim_sizes', None)
+
+            if action_dim_sizes is not None and self.config.sample_mode == 'action':
+                sizes = jnp.array(action_dim_sizes, dtype=jnp.int32)
+                pos = (state.cur_len - initial_len) % len(action_dim_sizes)
+                valid = jnp.arange(logits.shape[-1]) < sizes[pos]
+                logits = jnp.where(valid[None, :], logits, -jnp.inf)
+
             next_token = jax.random.categorical(prng_key, logits, axis=-1)
             next_token = jax.lax.cond(
                 (state.cur_len - initial_len + 1) % 257 == 0,
