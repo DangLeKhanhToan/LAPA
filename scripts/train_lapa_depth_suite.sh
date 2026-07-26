@@ -99,6 +99,8 @@ args=(
   --eval_log_freq="$EVAL_LOG_FREQ"
   --save_milestone_freq="$SAVE_MILESTONE_FREQ"
   --runtime_log_steps="$RUNTIME_LOG_STEPS"
+  --debug_numerics=True
+  --stop_on_nonfinite=True
   --load_llama_config="7b"
   --load_checkpoint="params::$LAPA_PARAMS"
   --update_llama_config="dict(action_vocab_size=${ACTION_VOCAB_SIZE},delta_vocab_size=8,theta=50000000,max_sequence_length=2048,use_flash_attention=True,scan_attention=True,scan_query_chunk_size=512,scan_key_chunk_size=1024,remat_attention='nothing_saveable',scan_mlp=True,scan_mlp_chunk_size=8192,remat_mlp='nothing_saveable',remat_block='nothing_saveable',scan_layers=True)"
