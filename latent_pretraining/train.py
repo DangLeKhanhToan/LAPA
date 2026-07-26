@@ -111,75 +111,6 @@ def _batch_summary(batch):
     return "{ " + "; ".join(items) + " }"
 
 
-def _host_numeric_summary(value):
-    """Small host-side summary used only for the first diagnostic batches."""
-    array = np.asarray(jax.device_get(value))
-    if np.issubdtype(array.dtype, np.bool_):
-        return {
-            "shape": tuple(array.shape),
-            "dtype": str(array.dtype),
-            "size": int(array.size),
-            "true": int(array.sum()),
-            "false": int(array.size - array.sum()),
-        }
-    if not np.issubdtype(array.dtype, np.number):
-        return {"shape": tuple(array.shape), "dtype": str(array.dtype)}
-    finite = np.isfinite(array)
-    summary = {
-        "shape": tuple(array.shape),
-        "dtype": str(array.dtype),
-        "size": int(array.size),
-        "finite": int(finite.sum()),
-        "nan": int(np.isnan(array).sum()),
-        "posinf": int(np.isposinf(array).sum()),
-        "neginf": int(np.isneginf(array).sum()),
-    }
-    if finite.any():
-        finite_values = array[finite].astype(np.float64)
-        summary.update(
-            min=float(finite_values.min()),
-            max=float(finite_values.max()),
-            mean=float(finite_values.mean()),
-            absmax=float(np.abs(finite_values).max()),
-        )
-    return summary
-
-
-def _jax_numeric_summary(prefix, value):
-    """JIT-safe scalar diagnostics; reductions are accumulated in fp32."""
-    value = jnp.asarray(value)
-    finite = jnp.isfinite(value)
-    safe = jnp.where(finite, value.astype(jnp.float32), 0.0)
-    return {
-        f"{prefix}_size": jnp.asarray(value.size, dtype=jnp.int32),
-        f"{prefix}_nonfinite": jnp.sum(~finite),
-        f"{prefix}_nan": jnp.sum(jnp.isnan(value)),
-        f"{prefix}_posinf": jnp.sum(jnp.isposinf(value)),
-        f"{prefix}_neginf": jnp.sum(jnp.isneginf(value)),
-        f"{prefix}_finite_min": jnp.min(jnp.where(finite, safe, jnp.inf)),
-        f"{prefix}_finite_max": jnp.max(jnp.where(finite, safe, -jnp.inf)),
-        f"{prefix}_finite_absmax": jnp.max(jnp.abs(safe)),
-    }
-
-
-def _jax_tree_numeric_summary(prefix, tree):
-    """Report whether a parameter/gradient tree has any non-finite values."""
-    leaves = jax.tree_util.tree_leaves(tree)
-    nonfinite = [jnp.sum(~jnp.isfinite(x)) for x in leaves]
-    nan = [jnp.sum(jnp.isnan(x)) for x in leaves]
-    inf = [jnp.sum(jnp.isinf(x)) for x in leaves]
-    absmax = [
-        jnp.max(jnp.where(jnp.isfinite(x), jnp.abs(x.astype(jnp.float32)), 0.0))
-        for x in leaves
-    ]
-    return {
-        f"{prefix}_nonfinite": jnp.sum(jnp.stack(nonfinite)),
-        f"{prefix}_nan": jnp.sum(jnp.stack(nan)),
-        f"{prefix}_inf": jnp.sum(jnp.stack(inf)),
-        f"{prefix}_absmax": jnp.max(jnp.stack(absmax)),
-    }
-
-
 def _runtime_log(label, extra=None):
     if jax.process_index() != 0:
         return
@@ -245,8 +176,6 @@ FLAGS, FLAGS_DEF = define_flags_with_default(
     freeze_vision_params=False,
     mse_loss=1,
     runtime_log_steps=3,
-    debug_numerics=False,
-    stop_on_nonfinite=True,
 ) 
 
 
@@ -617,33 +546,11 @@ def main(argv):
                     action_loss=action_loss,
                     action_acc=action_acc,
                 )
-                if FLAGS.debug_numerics:
-                    metrics.update(_jax_numeric_summary("depth_features", batch['depth_features']))
-                    metrics.update(_jax_numeric_summary("action_logits", action_logits))
-                    metrics.update(_jax_numeric_summary("text_logits", text_logits))
-                    metrics.update(_jax_numeric_summary("delta_logits", delta_logits))
-                    metrics.update(
-                        action_loss_mask_sum=jnp.sum(
-                            batch['loss_masks'] * batch['target_action_masks']
-                        ),
-                        text_loss_mask_sum=jnp.sum(
-                            batch['loss_masks']
-                            * (1.0 - batch['target_vision_masks'])
-                            * (1.0 - batch['target_delta_masks'])
-                            * (1.0 - batch['target_action_masks'])
-                        ),
-                        delta_loss_mask_sum=jnp.sum(
-                            batch['loss_masks'] * batch['target_delta_masks']
-                        ),
-                    )
             else:
                 raise ValueError(f"Unsupported modality: {FLAGS.modality}")
             return loss, metrics 
         grad_fn = jax.value_and_grad(loss_and_accuracy, has_aux=True)
         (loss, loss_metrics), grads = grad_fn(train_state.params)
-        if FLAGS.debug_numerics:
-            loss_metrics.update(_jax_tree_numeric_summary("params_before_update", train_state.params))
-            loss_metrics.update(_jax_tree_numeric_summary("grads", grads))
         if FLAGS.freeze_vision_params:
             grads = freeze_named_grads(grads, ("vte", "vision_head"))
 
@@ -998,25 +905,14 @@ def main(argv):
             flattened_target = flatten_dict(
                 to_state_dict(target), keep_empty_nodes=True
             )
-            missing_keys = []
             for key, value in flattened_target.items():
                 if key not in flattend_train_state and value == empty_node:
                     flattend_train_state[key] = value
                 elif key not in flattend_train_state:
-                    missing_keys.append("/".join(str(part) for part in key))
                     initializer = jax.nn.initializers.lecun_normal()  # Example initializer
                
                     tensor = initializer(jax.random.PRNGKey(0), value.shape, dtype=value.dtype)
                     flattend_train_state[key] = tensor
-            if missing_keys:
-                _runtime_log(
-                    "checkpoint_missing_params",
-                    {
-                        "count": len(missing_keys),
-                        "first_50": missing_keys[:50],
-                        "initializer": "lecun_normal(seed=0)",
-                    },
-                )
 
 
         train_state = unflatten_dict(flattend_train_state)
@@ -1134,25 +1030,12 @@ def main(argv):
                 break
             fetch_elapsed = time.time() - fetch_start
             if step < start_step + runtime_log_steps:
-                numeric_batch = {}
-                if FLAGS.debug_numerics:
-                    for key in (
-                        "depth_features",
-                        "loss_masks",
-                        "target_tokens",
-                        "target_action_masks",
-                        "target_delta_masks",
-                        "target_vision_masks",
-                    ):
-                        if key in batch:
-                            numeric_batch[key] = _host_numeric_summary(batch[key])
                 _runtime_log(
                     "batch_ready",
                     {
                         "step": step,
                         "fetch_sec": round(fetch_elapsed, 3),
                         "batch": _batch_summary(batch),
-                        "numeric_batch": pprint.pformat(numeric_batch),
                         "dataset_metrics": pprint.pformat(dataset_metrics),
                     },
                 )
@@ -1170,26 +1053,6 @@ def main(argv):
                         "metrics": pprint.pformat(metrics_host),
                     },
                 )
-                if FLAGS.debug_numerics and FLAGS.stop_on_nonfinite:
-                    nonfinite_keys = {
-                        key: value
-                        for key, value in metrics_host.items()
-                        if (
-                            key.endswith("_nonfinite")
-                            or key in ("loss", "action_loss", "text_loss", "gradient_norm")
-                        )
-                        and not np.all(np.asarray(value) == 0)
-                        and not np.all(np.isfinite(np.asarray(value)))
-                    }
-                    # Count metrics are finite integers, so inspect their value separately.
-                    for key, value in metrics_host.items():
-                        if key.endswith("_nonfinite") and np.any(np.asarray(value) > 0):
-                            nonfinite_keys[key] = value
-                    if nonfinite_keys:
-                        raise FloatingPointError(
-                            "Non-finite training values detected after diagnostic logging: "
-                            + pprint.pformat(nonfinite_keys)
-                        )
             if step % FLAGS.log_freq == 0:
                 if FLAGS.eval_steps > 0 and step % FLAGS.eval_log_freq == 0:
                     eval_metric_list = []
