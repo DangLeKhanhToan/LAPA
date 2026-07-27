@@ -9,6 +9,7 @@ export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_megacore_fusion_allow_ags
 
 LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
 SUITE="${SUITE:-libero_90}"
+STAGE25_MODEL_NAME="${STAGE25_MODEL_NAME:-model4}"
 DATA_ROOT="${DATA_ROOT:-$LAPA_ROOT/datasets/lapa_libero_v2}"
 TRAIN_JSONL="${TRAIN_JSONL:-$DATA_ROOT/${SUITE}.jsonl}"
 if [[ -z "${IMAGE_ROOT:-}" ]]; then
@@ -19,7 +20,7 @@ if [[ -z "${IMAGE_ROOT:-}" ]]; then
   fi
 fi
 ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$DATA_ROOT/action_bins_${SUITE}.csv}"
-DEPTH_BASE_DIR="${DEPTH_BASE_DIR:-$LAPA_ROOT/datasets/features_depth_branch/stage25_libero_features_model4/${SUITE}/stage25_model4}"
+DEPTH_BASE_DIR="${DEPTH_BASE_DIR:-$LAPA_ROOT/datasets/features_depth_branch/stage25_libero_features_${STAGE25_MODEL_NAME}/${SUITE}/stage25_${STAGE25_MODEL_NAME}}"
 DEPTH_DATA_DIR="${DEPTH_DATA_DIR:-}"
 DEPTH_MANIFEST="${DEPTH_MANIFEST:-}"
 
@@ -99,6 +100,7 @@ args=(
   --eval_log_freq="$EVAL_LOG_FREQ"
   --save_milestone_freq="$SAVE_MILESTONE_FREQ"
   --runtime_log_steps="$RUNTIME_LOG_STEPS"
+  --abort_on_nonfinite=True
   --load_llama_config="7b"
   --load_checkpoint="params::$LAPA_PARAMS"
   --update_llama_config="dict(action_vocab_size=${ACTION_VOCAB_SIZE},delta_vocab_size=8,theta=50000000,max_sequence_length=2048,use_flash_attention=True,scan_attention=True,scan_query_chunk_size=512,scan_key_chunk_size=1024,remat_attention='nothing_saveable',scan_mlp=True,scan_mlp_chunk_size=8192,remat_mlp='nothing_saveable',remat_block='nothing_saveable',scan_layers=True)"
@@ -152,6 +154,7 @@ if [[ -n "$DEPTH_MANIFEST" ]]; then
 fi
 
 echo "[train-depth-suite] suite: $SUITE"
+echo "[train-depth-suite] stage25 model: $STAGE25_MODEL_NAME"
 echo "[train-depth-suite] train jsonl: $TRAIN_JSONL"
 echo "[train-depth-suite] image root: $IMAGE_ROOT"
 echo "[train-depth-suite] action bins: $ACTION_SCALE_FILE"

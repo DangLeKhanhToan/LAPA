@@ -81,8 +81,10 @@ export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda,cpu}"
 [[ -d "$DEPTH_BRANCH_ROOT" ]] || { echo "ERROR: DEPTH_BRANCH_ROOT not found: $DEPTH_BRANCH_ROOT" >&2; exit 1; }
 [[ -f "$STAGE25_MODEL_CHECKPOINT" ]] || { echo "ERROR: STAGE25_MODEL_CHECKPOINT not found: $STAGE25_MODEL_CHECKPOINT" >&2; exit 1; }
 [[ -f "$ACTION_SCALE_FILE" ]] || { echo "ERROR: ACTION_SCALE_FILE not found: $ACTION_SCALE_FILE" >&2; exit 1; }
-[[ -d "$DEPTH_ANYTHING_REPO_DIR/depth_anything_v2" ]] || { echo "ERROR: DEPTH_ANYTHING_REPO_DIR is not a DepthAnythingV2 repo: $DEPTH_ANYTHING_REPO_DIR" >&2; exit 1; }
-[[ -f "$DEPTH_ANYTHING_CHECKPOINT" ]] || { echo "ERROR: DEPTH_ANYTHING_CHECKPOINT not found: $DEPTH_ANYTHING_CHECKPOINT" >&2; exit 1; }
+if [[ "$STAGE25_MODEL_NAME" != "model5" ]]; then
+  [[ -d "$DEPTH_ANYTHING_REPO_DIR/depth_anything_v2" ]] || { echo "ERROR: DEPTH_ANYTHING_REPO_DIR is not a DepthAnythingV2 repo: $DEPTH_ANYTHING_REPO_DIR" >&2; exit 1; }
+  [[ -f "$DEPTH_ANYTHING_CHECKPOINT" ]] || { echo "ERROR: DEPTH_ANYTHING_CHECKPOINT not found: $DEPTH_ANYTHING_CHECKPOINT" >&2; exit 1; }
+fi
 
 mkdir -p "$LOG_DIR" "$OUTPUT_DIR"
 RGB_LOG="$LOG_DIR/rgb_feature_gpu${RGB_CUDA_VISIBLE_DEVICES//,/}.log"
@@ -146,22 +148,29 @@ CUDA_VISIBLE_DEVICES="$RGB_CUDA_VISIBLE_DEVICES" "$MODEL_PY" -m eval.lapa_rgb_fe
   > "$RGB_LOG" 2>&1 &
 RGB_PID=$!
 
-CUDA_VISIBLE_DEVICES="$STAGE25_CUDA_VISIBLE_DEVICES" "$MODEL_PY" -m eval.stage25_feature_server \
-  --stage25_bundle_dir "$DEPTH_BRANCH_ROOT" \
-  --model_name "$STAGE25_MODEL_NAME" \
-  --model_checkpoint "$STAGE25_MODEL_CHECKPOINT" \
-  --original_lapa_checkpoint "$ORIGINAL_LAPA_CHECKPOINT" \
-  --vqgan_checkpoint "$VQGAN_CHECKPOINT" \
-  --vocab_file "$VOCAB_FILE" \
-  --mesh_dim "1,1,1,1" \
-  --host "127.0.0.1" \
-  --port "$STAGE25_PORT" \
-  --depth_anything_repo_dir "$DEPTH_ANYTHING_REPO_DIR" \
-  --depth_anything_checkpoint "$DEPTH_ANYTHING_CHECKPOINT" \
-  --depth_anything_encoder "$DEPTH_ANYTHING_ENCODER" \
-  --depth_anything_input_size "$DEPTH_ANYTHING_INPUT_SIZE" \
-  --depth_anything_device "$DEPTH_ANYTHING_DEVICE" \
-  --rgb_feature_server_url "http://127.0.0.1:${RGB_PORT}" \
+stage25_args=(
+  -m eval.stage25_feature_server
+  --stage25_bundle_dir "$DEPTH_BRANCH_ROOT"
+  --model_name "$STAGE25_MODEL_NAME"
+  --model_checkpoint "$STAGE25_MODEL_CHECKPOINT"
+  --original_lapa_checkpoint "$ORIGINAL_LAPA_CHECKPOINT"
+  --vqgan_checkpoint "$VQGAN_CHECKPOINT"
+  --vocab_file "$VOCAB_FILE"
+  --mesh_dim "1,1,1,1"
+  --host "127.0.0.1"
+  --port "$STAGE25_PORT"
+  --rgb_feature_server_url "http://127.0.0.1:${RGB_PORT}"
+)
+if [[ "$STAGE25_MODEL_NAME" != "model5" ]]; then
+  stage25_args+=(
+    --depth_anything_repo_dir "$DEPTH_ANYTHING_REPO_DIR"
+    --depth_anything_checkpoint "$DEPTH_ANYTHING_CHECKPOINT"
+    --depth_anything_encoder "$DEPTH_ANYTHING_ENCODER"
+    --depth_anything_input_size "$DEPTH_ANYTHING_INPUT_SIZE"
+    --depth_anything_device "$DEPTH_ANYTHING_DEVICE"
+  )
+fi
+CUDA_VISIBLE_DEVICES="$STAGE25_CUDA_VISIBLE_DEVICES" "$MODEL_PY" "${stage25_args[@]}" \
   > "$STAGE25_LOG" 2>&1 &
 STAGE25_PID=$!
 

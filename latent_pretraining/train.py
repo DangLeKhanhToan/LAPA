@@ -176,6 +176,7 @@ FLAGS, FLAGS_DEF = define_flags_with_default(
     freeze_vision_params=False,
     mse_loss=1,
     runtime_log_steps=3,
+    abort_on_nonfinite=True,
 ) 
 
 
@@ -1076,6 +1077,25 @@ def main(argv):
                 log_metrics.update(metrics)
                 log_metrics.update(dataset_metrics)
                 log_metrics = jax.device_get(log_metrics)
+                if FLAGS.abort_on_nonfinite:
+                    nonfinite_metrics = {
+                        key: value
+                        for key, value in log_metrics.items()
+                        if key in (
+                            "loss",
+                            "action_loss",
+                            "text_loss",
+                            "gradient_norm",
+                            "param_norm",
+                        )
+                        and not np.all(np.isfinite(np.asarray(value)))
+                    }
+                    if nonfinite_metrics:
+                        raise FloatingPointError(
+                            "Stopping training because scalar metrics became "
+                            f"non-finite at step {step}: "
+                            f"{pprint.pformat(nonfinite_metrics)}"
+                        )
                 logger.log(log_metrics)
                 tqdm.write("\n" + pprint.pformat(log_metrics) + "\n")
 

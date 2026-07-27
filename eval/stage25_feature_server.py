@@ -36,9 +36,14 @@ def import_stage25_bundle(bundle_dir: str):
         Stage25RolloutFeatureExtractor,
         build_lapa,
         build_model4,
+        build_model5,
     )
 
-    return Stage25RolloutFeatureExtractor, build_lapa, build_model4
+    return Stage25RolloutFeatureExtractor, build_lapa, {
+        "model2": build_model4,
+        "model4": build_model4,
+        "model5": build_model5,
+    }
 
 
 def load_rgb(path: str, image_size: int) -> np.ndarray:
@@ -110,7 +115,8 @@ class DepthAnythingV2Runner:
 
 class Stage25FeatureServer:
     def __init__(self, args):
-        Stage25RolloutFeatureExtractor, build_lapa, build_model = import_stage25_bundle(args.stage25_bundle_dir)
+        Stage25RolloutFeatureExtractor, build_lapa, model_builders = import_stage25_bundle(args.stage25_bundle_dir)
+        build_model = model_builders[args.model_name]
 
         self.image_size = args.image_size
         self.model_name = args.model_name
@@ -174,6 +180,7 @@ class Stage25FeatureServer:
             self.extractor = Stage25RolloutFeatureExtractor(
                 lapa=lapa,
                 model4=model,
+                model_name=args.model_name,
                 image_size=args.image_size,
                 depth_scale=args.depth_scale,
                 repeat_depth_to_3ch=bool(args.repeat_depth_to_3ch),
@@ -218,8 +225,12 @@ class Stage25FeatureServer:
         import torch
 
         z_rgb = torch.as_tensor(z_rgb_feature, dtype=torch.float32).reshape(1, -1).cuda()
-        depth1 = self._depth_to_tensor(depth_image).unsqueeze(0).cuda().float()
         with torch.no_grad():
+            if self.model_name == "model5":
+                return self.model.extract_z_depth_feature(
+                    z_rgb_features=z_rgb,
+                ).squeeze(0).detach().cpu()
+            depth1 = self._depth_to_tensor(depth_image).unsqueeze(0).cuda().float()
             return self.model.extract_z_depth_feature(
                 depth1=depth1,
                 z_rgb_features=z_rgb,
@@ -231,7 +242,10 @@ class Stage25FeatureServer:
             instruction = payload["instruction"]
 
             rgb = load_rgb(rgb_path, self.image_size)
-            if payload.get("depth_image") is not None:
+            if self.model_name == "model5":
+                depth = None
+                depth_source = "not_used_model5"
+            elif payload.get("depth_image") is not None:
                 depth = load_depth(payload["depth_image"])
                 depth_source = "payload"
             elif self.depth_anything is not None:
@@ -268,7 +282,9 @@ class Stage25FeatureServer:
             }
             if payload.get("return_debug", False):
                 result["z_rgb_shape"] = z_rgb_shape
-                result["depth_shape"] = list(np.asarray(depth).shape)
+                result["depth_shape"] = (
+                    None if depth is None else list(np.asarray(depth).shape)
+                )
             return JSONResponse(result)
         except Exception:
             traceback.print_exc()
@@ -280,7 +296,12 @@ def parse_args():
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=32821)
     parser.add_argument("--stage25_bundle_dir", type=str, required=True)
-    parser.add_argument("--model_name", type=str, default="model4", choices=("model2", "model4"))
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="model4",
+        choices=("model2", "model4", "model5"),
+    )
     parser.add_argument("--model_checkpoint", type=str, required=True)
 
     parser.add_argument("--original_lapa_checkpoint", type=str, required=True)

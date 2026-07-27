@@ -41,6 +41,9 @@ from latent_pretraining.inference_update_jsonl_train import LAPAInference
 from laq_model.latent_action_quantization_stage25_feature_model4 import (
     LatentActionQuantizationStage25Model4,
 )
+from laq_model.latent_action_quantization_stage25_feature_model5 import (
+    LatentActionQuantizationStage25Model5,
+)
 from test_ssv2_25_model4_no_gt import (
     load_depth_image,
     load_model4_checkpoint,
@@ -147,6 +150,36 @@ def build_model4(
     return model
 
 
+def build_model5(
+    checkpoint: str,
+    dim: int = 1024,
+    code_seq_len: int = 4,
+    z_rgb_feature_dim: int = 4096,
+    z_depth_feature_dim: int = 1024,
+    predict_token_features: bool = False,
+    strict: bool = True,
+    **unused_kwargs,
+) -> LatentActionQuantizationStage25Model5:
+    """Build the RGB-feature-only Model5 with strict checkpoint validation."""
+    ckpt_raw = torch.load(checkpoint, map_location="cpu")
+    z_depth_feature_dim, predict_token_features = infer_output_config_from_checkpoint(
+        ckpt_raw,
+        default_dim=z_depth_feature_dim,
+        default_predict_token_features=predict_token_features,
+    )
+    model = LatentActionQuantizationStage25Model5(
+        dim=dim,
+        code_seq_len=code_seq_len,
+        z_rgb_feature_dim=z_rgb_feature_dim,
+        z_depth_feature_dim=z_depth_feature_dim,
+        predict_token_features=predict_token_features,
+    ).cuda()
+    load_result = model.load(checkpoint, strict=strict)
+    print("model5 checkpoint load result:", load_result)
+    model.eval()
+    return model
+
+
 class Stage25RolloutFeatureExtractor:
     """
     Online (per-step) replacement for the two batch scripts:
@@ -161,12 +194,14 @@ class Stage25RolloutFeatureExtractor:
         self,
         lapa: LAPAInference,
         model4: LatentActionQuantizationStage25Model4,
+        model_name: str = "model4",
         image_size: int = 256,
         depth_scale: float = 65535.0,
         repeat_depth_to_3ch: bool = True,
     ):
         self.lapa = lapa
         self.model4 = model4
+        self.model_name = model_name
         self.image_size = image_size
         self.depth_scale = depth_scale
         self.repeat_depth_to_3ch = repeat_depth_to_3ch
@@ -223,12 +258,16 @@ class Stage25RolloutFeatureExtractor:
             np.asarray(z_rgb_feature), dtype=torch.float32
         ).unsqueeze(0).cuda()
 
-        depth1 = self._depth_to_tensor(depth_image).unsqueeze(0).cuda().float()
-
-        z_depth_feature_pred = self.model4.extract_z_depth_feature(
-            depth1=depth1,
-            z_rgb_features=z_rgb_features,
-        )
+        if self.model_name == "model5":
+            z_depth_feature_pred = self.model4.extract_z_depth_feature(
+                z_rgb_features=z_rgb_features,
+            )
+        else:
+            depth1 = self._depth_to_tensor(depth_image).unsqueeze(0).cuda().float()
+            z_depth_feature_pred = self.model4.extract_z_depth_feature(
+                depth1=depth1,
+                z_rgb_features=z_rgb_features,
+            )
 
         return {
             "latent_action": latent_action,

@@ -78,8 +78,10 @@ export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda,cpu}"
 [[ -d "$DEPTH_BRANCH_ROOT" ]] || { echo "ERROR: DEPTH_BRANCH_ROOT not found: $DEPTH_BRANCH_ROOT" >&2; exit 1; }
 [[ -f "$STAGE25_MODEL_CHECKPOINT" ]] || { echo "ERROR: STAGE25_MODEL_CHECKPOINT not found: $STAGE25_MODEL_CHECKPOINT" >&2; exit 1; }
 [[ -f "$ACTION_SCALE_FILE" ]] || { echo "ERROR: ACTION_SCALE_FILE not found: $ACTION_SCALE_FILE" >&2; exit 1; }
-[[ -d "$DEPTH_ANYTHING_REPO_DIR/depth_anything_v2" ]] || { echo "ERROR: DEPTH_ANYTHING_REPO_DIR is not a DepthAnythingV2 repo: $DEPTH_ANYTHING_REPO_DIR" >&2; exit 1; }
-[[ -f "$DEPTH_ANYTHING_CHECKPOINT" ]] || { echo "ERROR: DEPTH_ANYTHING_CHECKPOINT not found: $DEPTH_ANYTHING_CHECKPOINT" >&2; exit 1; }
+if [[ "$STAGE25_MODEL_NAME" != "model5" ]]; then
+  [[ -d "$DEPTH_ANYTHING_REPO_DIR/depth_anything_v2" ]] || { echo "ERROR: DEPTH_ANYTHING_REPO_DIR is not a DepthAnythingV2 repo: $DEPTH_ANYTHING_REPO_DIR" >&2; exit 1; }
+  [[ -f "$DEPTH_ANYTHING_CHECKPOINT" ]] || { echo "ERROR: DEPTH_ANYTHING_CHECKPOINT not found: $DEPTH_ANYTHING_CHECKPOINT" >&2; exit 1; }
+fi
 
 stage25_args=(
   -m eval.stage25_feature_server
@@ -92,12 +94,16 @@ stage25_args=(
   --mesh_dim "$STAGE25_MESH_DIM"
   --host "127.0.0.1"
   --port "$STAGE25_PORT"
-  --depth_anything_repo_dir "$DEPTH_ANYTHING_REPO_DIR"
-  --depth_anything_checkpoint "$DEPTH_ANYTHING_CHECKPOINT"
-  --depth_anything_encoder "$DEPTH_ANYTHING_ENCODER"
-  --depth_anything_input_size "$DEPTH_ANYTHING_INPUT_SIZE"
-  --depth_anything_device "$DEPTH_ANYTHING_DEVICE"
 )
+if [[ "$STAGE25_MODEL_NAME" != "model5" ]]; then
+  stage25_args+=(
+    --depth_anything_repo_dir "$DEPTH_ANYTHING_REPO_DIR"
+    --depth_anything_checkpoint "$DEPTH_ANYTHING_CHECKPOINT"
+    --depth_anything_encoder "$DEPTH_ANYTHING_ENCODER"
+    --depth_anything_input_size "$DEPTH_ANYTHING_INPUT_SIZE"
+    --depth_anything_device "$DEPTH_ANYTHING_DEVICE"
+  )
+fi
 
 policy_args=(
   -m latent_pretraining.deploy
@@ -117,7 +123,11 @@ echo "[eval-online] suite: $SUITE"
 echo "[eval-online] stage25 model: $STAGE25_MODEL_NAME $STAGE25_MODEL_CHECKPOINT"
 echo "[eval-online] original LAPA: $ORIGINAL_LAPA_CHECKPOINT"
 echo "[eval-online] finetuned policy: $FINETUNED_CHECKPOINT"
-echo "[eval-online] depthanything: $DEPTH_ANYTHING_ENCODER $DEPTH_ANYTHING_CHECKPOINT"
+if [[ "$STAGE25_MODEL_NAME" == "model5" ]]; then
+  echo "[eval-online] depthanything: not used by model5"
+else
+  echo "[eval-online] depthanything: $DEPTH_ANYTHING_ENCODER $DEPTH_ANYTHING_CHECKPOINT"
+fi
 echo "[eval-online] action bins: $ACTION_SCALE_FILE"
 echo "[eval-online] stage25 visible GPUs: ${STAGE25_CUDA_VISIBLE_DEVICES:-2,3}"
 echo "[eval-online] stage25 mesh_dim: $STAGE25_MESH_DIM"

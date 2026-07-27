@@ -13,6 +13,7 @@ RGB_FEATURE_CANDIDATES = (
 )
 DEPTH_FEATURE_CANDIDATES = (
     "z_depth_feature_pred",
+    "pred_z_depth_feature",
     "z_depth_feature_pred_model7_1",
     "z_depth_feature_gt",
     "z_depth_feature",
