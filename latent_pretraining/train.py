@@ -177,6 +177,7 @@ FLAGS, FLAGS_DEF = define_flags_with_default(
     mse_loss=1,
     runtime_log_steps=3,
     abort_on_nonfinite=True,
+    diagnose_numerics=False,
 ) 
 
 
@@ -547,6 +548,39 @@ def main(argv):
                     action_loss=action_loss,
                     action_acc=action_acc,
                 )
+                if FLAGS.diagnose_numerics:
+                    # Targeted activation checks only. Unlike the old debug path,
+                    # these do not scan the 7B parameter/gradient trees.
+                    for name, value in (
+                        ("depth_features", batch.get("depth_features")),
+                        ("action_logits", action_logits),
+                        ("text_logits", text_logits),
+                        ("delta_logits", delta_logits),
+                    ):
+                        if value is None:
+                            continue
+                        metrics[f"{name}_nonfinite"] = jnp.sum(
+                            ~jnp.isfinite(value)
+                        )
+                        finite_value = jnp.where(
+                            jnp.isfinite(value),
+                            value.astype(jnp.float32),
+                            0.0,
+                        )
+                        metrics[f"{name}_finite_absmax"] = jnp.max(
+                            jnp.abs(finite_value)
+                        )
+                    metrics.update(
+                        action_loss_mask_sum=jnp.sum(
+                            batch["loss_masks"] * batch["target_action_masks"]
+                        ),
+                        text_loss_mask_sum=jnp.sum(
+                            batch["loss_masks"]
+                            * (1.0 - batch["target_vision_masks"])
+                            * (1.0 - batch["target_delta_masks"])
+                            * (1.0 - batch["target_action_masks"])
+                        ),
+                    )
             else:
                 raise ValueError(f"Unsupported modality: {FLAGS.modality}")
             return loss, metrics 
@@ -906,14 +940,55 @@ def main(argv):
             flattened_target = flatten_dict(
                 to_state_dict(target), keep_empty_nodes=True
             )
+            missing_keys = []
             for key, value in flattened_target.items():
                 if key not in flattend_train_state and value == empty_node:
                     flattend_train_state[key] = value
                 elif key not in flattend_train_state:
-                    initializer = jax.nn.initializers.lecun_normal()  # Example initializer
-               
-                    tensor = initializer(jax.random.PRNGKey(0), value.shape, dtype=value.dtype)
+                    key_name = "/".join(str(part) for part in key)
+                    missing_index = len(missing_keys)
+                    missing_keys.append(key_name)
+                    rng = jax.random.fold_in(
+                        jax.random.PRNGKey(FLAGS.seed),
+                        missing_index,
+                    )
+
+                    # These Stage-3 tensors are intentionally absent from the
+                    # Stage-2 checkpoint. Initialize them exactly as declared by
+                    # Flax Embed/Dense in delta_llama_action.py, rather than
+                    # applying fan-in-dependent LeCun initialization in the
+                    # checkpoint loader. Distinct keys avoid correlated tensors.
+                    if key_name in (
+                        "transformer/ate/embedding",
+                        "action_head/kernel",
+                        "depth_action_proj/kernel",
+                    ):
+                        initializer = jax.nn.initializers.normal(
+                            stddev=llama_config.initializer_range
+                        )
+                    elif key_name.endswith("/bias"):
+                        initializer = jax.nn.initializers.zeros
+                    else:
+                        initializer = jax.nn.initializers.lecun_normal()
+
+                    tensor = initializer(
+                        rng,
+                        value.shape,
+                        dtype=value.dtype,
+                    )
                     flattend_train_state[key] = tensor
+            if missing_keys:
+                _runtime_log(
+                    "checkpoint_initialized_missing_params",
+                    {
+                        "count": len(missing_keys),
+                        "keys": missing_keys,
+                        "stage3_initializer": (
+                            "normal(stddev="
+                            f"{llama_config.initializer_range}, distinct_rngs)"
+                        ),
+                    },
+                )
 
 
         train_state = unflatten_dict(flattend_train_state)
