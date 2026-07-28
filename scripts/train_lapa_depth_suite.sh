@@ -60,6 +60,57 @@ if [[ ! -d "$DEPTH_DATA_DIR" ]]; then
 fi
 
 ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')}"
+
+# Validate every action token before allocating the 7B model on GPU.  This also
+# identifies legacy LIBERO JSONL files whose gripper token is {-1,+1}; the data
+# loader safely normalizes that final -1 token to bin 0.
+ACTION_TOKEN_SCAN="$(
+  python3 - "$TRAIN_JSONL" "$ACTION_VOCAB_SIZE" <<'PY'
+import json
+import sys
+
+path, vocab_text = sys.argv[1:3]
+vocab = int(vocab_text)
+mins = [None] * 7
+maxs = [None] * 7
+legacy_gripper_minus_one = 0
+records = 0
+
+with open(path, "r", encoding="utf-8") as stream:
+    for line_number, line in enumerate(stream, 1):
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        tokens = [int(value) for value in record["action"]]
+        if len(tokens) != 7:
+            raise SystemExit(
+                f"ERROR: {path}:{line_number}: expected 7 action tokens, "
+                f"found {len(tokens)}"
+            )
+        if tokens[-1] == -1:
+            legacy_gripper_minus_one += 1
+            tokens[-1] = 0
+        invalid = [value for value in tokens if value < 0 or value >= vocab]
+        if invalid:
+            raise SystemExit(
+                f"ERROR: {path}:{line_number}: action={tokens} contains "
+                f"tokens outside [0, {vocab - 1}]. The JSONL and action-bin "
+                "CSV were not generated as a matching pair."
+            )
+        for dim, value in enumerate(tokens):
+            mins[dim] = value if mins[dim] is None else min(mins[dim], value)
+            maxs[dim] = value if maxs[dim] is None else max(maxs[dim], value)
+        records += 1
+
+if records == 0:
+    raise SystemExit(f"ERROR: no records found in {path}")
+
+print(
+    f"records={records} min={mins} max={maxs} "
+    f"legacy_gripper_-1={legacy_gripper_minus_one}"
+)
+PY
+)"
 TOKENIZER_PATH="${TOKENIZER_PATH:-$LAPA_ROOT/lapa_checkpoints/tokenizer.model}"
 VQGAN_CKPT="${VQGAN_CKPT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
 LAPA_PARAMS="${LAPA_PARAMS:-$LAPA_ROOT/lapa_checkpoints/lapa_7b_sth/params}"
@@ -161,6 +212,7 @@ echo "[train-depth-suite] train jsonl: $TRAIN_JSONL"
 echo "[train-depth-suite] image root: $IMAGE_ROOT"
 echo "[train-depth-suite] action bins: $ACTION_SCALE_FILE"
 echo "[train-depth-suite] action_vocab_size: $ACTION_VOCAB_SIZE"
+echo "[train-depth-suite] action token scan: $ACTION_TOKEN_SCAN"
 echo "[train-depth-suite] depth dir: $DEPTH_DATA_DIR"
 echo "[train-depth-suite] depth manifest: ${DEPTH_MANIFEST:-<none>}"
 echo "[train-depth-suite] output: $OUTPUT_DIR/$EXPERIMENT_ID"

@@ -35,12 +35,13 @@ def import_stage25_bundle(bundle_dir: str):
     from rollout_stage25_model4 import (  # noqa: E402
         Stage25RolloutFeatureExtractor,
         build_lapa,
+        build_model2,
         build_model4,
         build_model5,
     )
 
     return Stage25RolloutFeatureExtractor, build_lapa, {
-        "model2": build_model4,
+        "model2": build_model2,
         "model4": build_model4,
         "model5": build_model5,
     }

@@ -41,6 +41,9 @@ from latent_pretraining.inference_update_jsonl_train import LAPAInference
 from laq_model.latent_action_quantization_stage25_feature_model4 import (
     LatentActionQuantizationStage25Model4,
 )
+from laq_model.latent_action_quantization_stage25_feature_model2 import (
+    LatentActionQuantizationStage25Model2,
+)
 from laq_model.latent_action_quantization_stage25_feature_model5 import (
     LatentActionQuantizationStage25Model5,
 )
@@ -147,6 +150,49 @@ def build_model4(
     print("model4 checkpoint load result:", load_result)
     model.eval()
 
+    return model
+
+
+def build_model2(
+    checkpoint: str,
+    dim: int = 1024,
+    image_size: int = 256,
+    patch_size: int = 32,
+    spatial_depth: int = 8,
+    dim_head: int = 64,
+    heads: int = 16,
+    code_seq_len: int = 4,
+    z_rgb_feature_dim: int = 4096,
+    z_depth_feature_dim: int = 1024,
+    predict_token_features: bool = False,
+    strict: bool = True,
+) -> LatentActionQuantizationStage25Model2:
+    """Build Model2 and expose its fused 1024-D representation for Stage 3."""
+
+    ckpt_raw = torch.load(checkpoint, map_location="cpu")
+    state = ckpt_raw["model"] if isinstance(ckpt_raw, dict) and "model" in ckpt_raw else ckpt_raw
+    head_weight = state.get("head.weight")
+    codebook_size = int(head_weight.shape[0]) if head_weight is not None else 8
+
+    model = LatentActionQuantizationStage25Model2(
+        dim=dim,
+        image_size=image_size,
+        patch_size=patch_size,
+        spatial_depth=spatial_depth,
+        dim_head=dim_head,
+        heads=heads,
+        code_seq_len=code_seq_len,
+        z_rgb_feature_dim=z_rgb_feature_dim,
+        z_depth_feature_dim=z_depth_feature_dim,
+        predict_token_features=predict_token_features,
+        feature_loss_weight=1.0,
+        cosine_loss_weight=0.1,
+        codebook_size=codebook_size,
+    ).cuda()
+
+    load_result = model.load(checkpoint, strict=strict)
+    print("model2 checkpoint load result:", load_result)
+    model.eval()
     return model
 
 

@@ -566,7 +566,20 @@ class VisionActionProcessor(object):
                 vision_mask.extend([False] * len(self.vision_end))
                 action_mask.extend([False] * len(tokens))
             elif 'action' in field:
-                action_tokens = example[field]
+                action_tokens = [int(token) for token in example[field]]
+                # Legacy LIBERO JSONL files stored the raw gripper action as
+                # {-1, +1}.  Action tokens are embedding indices, so -1 is an
+                # out-of-range gather that produces NaNs on JAX accelerators.
+                # The current per-suite binning represents the same values as
+                # {0, 1}; normalize only the known legacy gripper encoding.
+                if len(action_tokens) == self.config.n_tokens_per_action:
+                    if action_tokens[-1] == -1:
+                        action_tokens[-1] = 0
+                if any(token < 0 for token in action_tokens):
+                    raise ValueError(
+                        "Negative action token after legacy gripper "
+                        f"normalization: {action_tokens}"
+                    )
 
                 tokens = list(self.action_start)
                 tokens.extend(action_tokens)
@@ -748,7 +761,17 @@ class DeltaVisionActionProcessor(object):
                 vision_mask.extend([False] * len(tokens))
                 action_mask.extend([False] * len(tokens))
             elif 'action' in field:
-                action_tokens = example[field]
+                action_tokens = [int(token) for token in example[field]]
+                # Legacy LIBERO JSONL files stored the raw gripper action as
+                # {-1, +1}.  Embedding indices must be non-negative.
+                if len(action_tokens) == self.config.n_tokens_per_action:
+                    if action_tokens[-1] == -1:
+                        action_tokens[-1] = 0
+                if any(token < 0 for token in action_tokens):
+                    raise ValueError(
+                        "Negative action token after legacy gripper "
+                        f"normalization: {action_tokens}"
+                    )
 
                 tokens = list(self.action_start)
                 tokens.extend(action_tokens)
