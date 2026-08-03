@@ -6,13 +6,18 @@ PROJECT_DIR="$( cd -- "$( dirname -- "$SCRIPT_DIR" )" &> /dev/null && pwd )"
 cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}"
 
-MODEL_PY="${MODEL_PY:-/mnt/hdd/linh/long/conda_envs/lapa-depth/bin/python}"
+MODEL_PY="${MODEL_PY:-python}"
 LIBERO_PY="${LIBERO_PY:-$MODEL_PY}"
 LIBERO_REPO="${LIBERO_REPO:-$PROJECT_DIR/datasets/LIBERO}"
 LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
 DEPTH_BRANCH_ROOT="${DEPTH_BRANCH_ROOT:-$LAPA_ROOT/Depth_branch}"
 SUITE="${SUITE:-libero_spatial}"
 DATA_ROOT="${DATA_ROOT:-$LAPA_ROOT/datasets/lapa_libero_v2}"
+ACTION_FUSION_METHOD="${ACTION_FUSION_METHOD:-project}"
+case "$ACTION_FUSION_METHOD" in
+  project|concat) ;;
+  *) echo "ERROR: ACTION_FUSION_METHOD must be project or concat" >&2; exit 1 ;;
+esac
 
 STAGE3_CKPT_ROOT="${STAGE3_CKPT_ROOT:-$LAPA_ROOT/lapa_checkpoints/stage_3_depth_inject/lapa-depth_stage3}"
 suite_suffix="${SUITE#libero_}"
@@ -71,7 +76,7 @@ MAX_STEPS="${MAX_STEPS:-80}"
 INIT_OFFSET="${INIT_OFFSET:-0}"
 PROGRESS_FREQ="${PROGRESS_FREQ:-25}"
 ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')}"
-UPDATE_LLAMA_CONFIG="${UPDATE_LLAMA_CONFIG:-dict(action_vocab_size=${ACTION_VOCAB_SIZE},delta_vocab_size=8,sample_mode='text',theta=50000000,max_sequence_length=32768,scan_attention=False,scan_query_chunk_size=128,scan_key_chunk_size=128,scan_mlp=False,scan_mlp_chunk_size=8192,scan_layers=True)}"
+UPDATE_LLAMA_CONFIG="${UPDATE_LLAMA_CONFIG:-dict(action_vocab_size=${ACTION_VOCAB_SIZE},depth_feature_dim=1024,action_fusion_method='${ACTION_FUSION_METHOD}',delta_vocab_size=8,sample_mode='text',theta=50000000,max_sequence_length=32768,scan_attention=False,scan_query_chunk_size=128,scan_key_chunk_size=128,scan_mlp=False,scan_mlp_chunk_size=8192,scan_layers=True)}"
 
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.80}"
@@ -128,6 +133,7 @@ wait_for_log() {
 }
 
 echo "[split-rollout] suite: $SUITE"
+echo "[split-rollout] action fusion: $ACTION_FUSION_METHOD"
 echo "[split-rollout] finetuned policy: $FINETUNED_CHECKPOINT"
 echo "[split-rollout] action bins: $ACTION_SCALE_FILE"
 echo "[split-rollout] RGB baseline GPU: $RGB_CUDA_VISIBLE_DEVICES mesh=$RGB_MESH_DIM port=$RGB_PORT"

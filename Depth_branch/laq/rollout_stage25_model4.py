@@ -301,7 +301,7 @@ class Stage25RolloutFeatureExtractor:
         )
 
         z_rgb_features = torch.as_tensor(
-            np.asarray(z_rgb_feature), dtype=torch.float32
+            np.asarray(z_rgb_feature, dtype=np.float32), dtype=torch.float32
         ).unsqueeze(0).cuda()
 
         if self.model_name == "model5":

@@ -27,13 +27,20 @@ VIDEO_LLAMA_STANDARD_CONFIGS = LLAMA_STANDARD_CONFIGS
 class VideoLLaMAConfig(LLaMAConfig):
     model_type = "video_llama"
 
-    def __init__(self, vision_vocab_size=8448, tie_vision_embeddings=False, delta_vocab_size=32, action_vocab_size=245, sample_mode='all', **kwargs):
+    def __init__(self, vision_vocab_size=8448, tie_vision_embeddings=False, delta_vocab_size=32, action_vocab_size=245, depth_feature_dim=1024, action_fusion_method="project", sample_mode='all', **kwargs):
         super().__init__(**kwargs)
         self.vision_vocab_size = vision_vocab_size # 8192 + 256
         self.tie_vision_embeddings = tie_vision_embeddings
         self.sample_mode = sample_mode
         self.delta_vocab_size = delta_vocab_size
         self.action_vocab_size = action_vocab_size
+        self.depth_feature_dim = depth_feature_dim
+        if action_fusion_method not in ("project", "concat"):
+            raise ValueError(
+                "action_fusion_method must be 'project' or 'concat', "
+                f"got {action_fusion_method!r}"
+            )
+        self.action_fusion_method = action_fusion_method
 
     @staticmethod
     def get_partition_rules(scan_layers=False, scan_axis=0):
@@ -177,7 +184,7 @@ class FlaxVideoLLaMAPreTrainedModel(FlaxPreTrainedModel):
             vision_masks=vision_masks,
             delta_masks=delta_masks,
             action_masks=action_masks,
-            depth_features=None,
+            depth_features=jnp.zeros((batch_size, self.config.depth_feature_dim), dtype="f4"),
             attention_mask=attention_mask,
             segment_ids=segment_ids,
             position_ids=position_ids,
@@ -204,7 +211,7 @@ class FlaxVideoLLaMAPreTrainedModel(FlaxPreTrainedModel):
             vision_masks=vision_masks,
             delta_masks=delta_masks,
             action_masks=action_masks,
-            depth_features=None,
+            depth_features=jnp.zeros((input_shape[0], self.config.depth_feature_dim), dtype="f4"),
             attention_mask=attention_mask,
             segment_ids=segment_ids,
             position_ids=position_ids,
@@ -466,16 +473,15 @@ class FlaxDeltaActionLaMAForCausalLMModule(nn.Module):
             kernel_init=jax.nn.initializers.normal(stddev=self.config.initializer_range),
             precision=self.precision,
         )
-        self.depth_action_proj = nn.Dense(
-            self.config.hidden_size,
-            dtype=self.dtype,
-            param_dtype=self.param_dtype,
-            use_bias=False,
-            kernel_init=jax.nn.initializers.normal(stddev=self.config.initializer_range),
-            precision=self.precision,
-        )
-
-
+        if self.config.action_fusion_method == "project":
+            self.depth_action_proj = nn.Dense(
+                self.config.hidden_size,
+                dtype=self.dtype,
+                param_dtype=self.param_dtype,
+                use_bias=False,
+                kernel_init=jax.nn.initializers.normal(stddev=self.config.initializer_range),
+                precision=self.precision,
+            )
     def __call__(
         self,
         input_ids,
@@ -539,17 +545,52 @@ class FlaxDeltaActionLaMAForCausalLMModule(nn.Module):
         else:
             delta_logits = self.delta_head(hidden_states)
         
-        action_hidden_states = hidden_states
-        if depth_features is not None:
-            depth_context = self.depth_action_proj(depth_features).astype(hidden_states.dtype)
-            action_hidden_states = hidden_states + depth_context[:, None, :]
+        if depth_features is None and self.config.action_fusion_method == "project":
+            # Preserve legacy RGB-only inference: do not require projection
+            # parameters when no Stage-2.5 feature is supplied.
+            action_hidden_states = hidden_states
+        else:
+            if depth_features is None:
+                depth_features = jnp.zeros(
+                    (batch_size, self.config.depth_feature_dim), dtype=hidden_states.dtype
+                )
+            if depth_features.ndim != 2:
+                raise ValueError(
+                    "depth_features must have shape [batch, depth_feature_dim], "
+                    f"got {depth_features.shape}"
+                )
+            if depth_features.shape[-1] != self.config.depth_feature_dim:
+                raise ValueError(
+                    f"Expected depth_features dim {self.config.depth_feature_dim}, "
+                    f"got {depth_features.shape[-1]}"
+                )
+            depth_features = depth_features.astype(hidden_states.dtype)
+            if self.config.action_fusion_method == "project":
+                depth_context = self.depth_action_proj(depth_features).astype(hidden_states.dtype)
+                action_hidden_states = hidden_states + depth_context[:, None, :]
+            else:
+                # Concat architecture: 4096-D Stage-2 LAPA state + 1024-D
+                # Stage-2.5 depth feature = 5120-D input to the action head.
+                depth_context = jnp.broadcast_to(
+                    depth_features[:, None, :],
+                    hidden_states.shape[:-1] + (self.config.depth_feature_dim,),
+                )
+                action_hidden_states = jnp.concatenate(
+                    [hidden_states, depth_context], axis=-1
+                )
 
+        if self.config.tie_vision_embeddings and self.config.action_fusion_method == "concat":
+            raise ValueError(
+                "The depth-fused 5120-D action head cannot share the 4096-D "
+                "action-token embedding kernel. Set tie_vision_embeddings=False."
+            )
         if self.config.tie_vision_embeddings:
             shared_kernel = self.transformer.variables["params"]["ate"]["embedding"].T
-            action_logits = self.action_head.apply({"params": {"kernel": shared_kernel}}, action_hidden_states)
+            action_logits = self.action_head.apply(
+                {"params": {"kernel": shared_kernel}}, action_hidden_states
+            )
         else:
             action_logits = self.action_head(action_hidden_states)
-            # action_logits = self.action_head2(hidden_states)
 
         if self.config.sample_mode == 'all':
             if not return_dict:

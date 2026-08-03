@@ -11,7 +11,26 @@ LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
 SUITE="${SUITE:-libero_90}"
 STAGE25_MODEL_NAME="${STAGE25_MODEL_NAME:-model4}"
 DATA_ROOT="${DATA_ROOT:-$LAPA_ROOT/datasets/lapa_libero_v2}"
-TRAIN_JSONL="${TRAIN_JSONL:-$DATA_ROOT/${SUITE}.jsonl}"
+ACTION_FUSION_METHOD="${ACTION_FUSION_METHOD:-project}"
+case "$ACTION_FUSION_METHOD" in
+  project|concat) ;;
+  *) echo "ERROR: ACTION_FUSION_METHOD must be project or concat" >&2; exit 1 ;;
+esac
+
+MERGED_SUITES="${MERGED_SUITES:-libero_goal libero_object libero_spatial libero_90}"
+if [[ "$SUITE" == "libero_all" || "$SUITE" == "merged" ]]; then
+  MERGED_DATA_DIR="${MERGED_DATA_DIR:-$LAPA_ROOT/outputs/merged_datasets}"
+  mkdir -p "$MERGED_DATA_DIR"
+  TRAIN_JSONL="${TRAIN_JSONL:-$MERGED_DATA_DIR/libero_all.jsonl}"
+  : > "$TRAIN_JSONL"
+  for merged_suite in $MERGED_SUITES; do
+    source_jsonl="$DATA_ROOT/${merged_suite}.jsonl"
+    [[ -f "$source_jsonl" ]] || { echo "ERROR: merged-suite JSONL not found: $source_jsonl" >&2; exit 1; }
+    sed '/^[[:space:]]*$/d' "$source_jsonl" >> "$TRAIN_JSONL"
+  done
+else
+  TRAIN_JSONL="${TRAIN_JSONL:-$DATA_ROOT/${SUITE}.jsonl}"
+fi
 if [[ -z "${IMAGE_ROOT:-}" ]]; then
   if [[ -d "$DATA_ROOT/images" ]]; then
     IMAGE_ROOT="$DATA_ROOT/"
@@ -25,12 +44,26 @@ DEPTH_DATA_DIR="${DEPTH_DATA_DIR:-}"
 DEPTH_MANIFEST="${DEPTH_MANIFEST:-}"
 
 if [[ -z "$DEPTH_DATA_DIR" ]]; then
-  if compgen -G "$DEPTH_BASE_DIR/*_part*.pt" >/dev/null || compgen -G "$DEPTH_BASE_DIR/*_part*.pth" >/dev/null; then
-    DEPTH_DATA_DIR="$DEPTH_BASE_DIR"
+  if [[ "$SUITE" == "libero_all" || "$SUITE" == "merged" ]]; then
+    depth_dirs=()
+    for merged_suite in $MERGED_SUITES; do
+      suite_depth_base="$LAPA_ROOT/datasets/features_depth_branch/stage25_libero_features_${STAGE25_MODEL_NAME}/${merged_suite}/stage25_${STAGE25_MODEL_NAME}"
+      if compgen -G "$suite_depth_base/*_part*.pt" >/dev/null || compgen -G "$suite_depth_base/*_part*.pth" >/dev/null; then
+        depth_dirs+=("$suite_depth_base")
+      elif [[ -d "$suite_depth_base/z_depth_train_shard0" ]]; then
+        depth_dirs+=("$suite_depth_base/z_depth_train_shard0")
+      else
+        echo "ERROR: depth feature directory not found for $merged_suite: $suite_depth_base" >&2
+        exit 1
+      fi
+    done
+    DEPTH_DATA_DIR="$(IFS=,; echo "${depth_dirs[*]}")"
+  elif compgen -G "$DEPTH_BASE_DIR/*_part*.pt" >/dev/null || compgen -G "$DEPTH_BASE_DIR/*_part*.pth" >/dev/null; then
+      DEPTH_DATA_DIR="$DEPTH_BASE_DIR"
   elif [[ -d "$DEPTH_BASE_DIR/z_depth_train_shard0" ]]; then
-    DEPTH_DATA_DIR="$DEPTH_BASE_DIR/z_depth_train_shard0"
+      DEPTH_DATA_DIR="$DEPTH_BASE_DIR/z_depth_train_shard0"
   else
-    DEPTH_DATA_DIR="$DEPTH_BASE_DIR"
+      DEPTH_DATA_DIR="$DEPTH_BASE_DIR"
   fi
 fi
 
@@ -50,16 +83,24 @@ if [[ ! -f "$TRAIN_JSONL" ]]; then
   echo "ERROR: train JSONL not found: $TRAIN_JSONL" >&2
   exit 1
 fi
-if [[ ! -f "$ACTION_SCALE_FILE" ]]; then
+if [[ "$SUITE" != "libero_all" && "$SUITE" != "merged" && ! -f "$ACTION_SCALE_FILE" ]]; then
   echo "ERROR: action bins CSV not found: $ACTION_SCALE_FILE" >&2
   exit 1
 fi
-if [[ ! -d "$DEPTH_DATA_DIR" ]]; then
-  echo "ERROR: depth feature directory not found: $DEPTH_DATA_DIR" >&2
-  exit 1
+if [[ "$SUITE" == "libero_all" || "$SUITE" == "merged" ]]; then
+  computed_action_vocab=0
+  for merged_suite in $MERGED_SUITES; do
+    bins_file="$DATA_ROOT/action_bins_${merged_suite}.csv"
+    [[ -f "$bins_file" ]] || { echo "ERROR: action bins not found: $bins_file" >&2; exit 1; }
+    columns="$(head -1 "$bins_file" | awk -F, '{print NF}')"
+    (( columns > computed_action_vocab )) && computed_action_vocab="$columns"
+  done
+  ACTION_SCALE_FILE="<per-suite bins; training uses token IDs>"
+  ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$computed_action_vocab}"
+else
+  [[ -d "$DEPTH_DATA_DIR" ]] || { echo "ERROR: depth feature directory not found: $DEPTH_DATA_DIR" >&2; exit 1; }
+  ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')}"
 fi
-
-ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')}"
 
 # Validate every action token before allocating the 7B model on GPU.  This also
 # identifies legacy LIBERO JSONL files whose gripper token is {-1,+1}; the data
@@ -156,7 +197,7 @@ args=(
   --diagnose_numerics="$DIAGNOSE_NUMERICS"
   --load_llama_config="7b"
   --load_checkpoint="params::$LAPA_PARAMS"
-  --update_llama_config="dict(action_vocab_size=${ACTION_VOCAB_SIZE},delta_vocab_size=8,theta=50000000,max_sequence_length=2048,use_flash_attention=True,scan_attention=True,scan_query_chunk_size=512,scan_key_chunk_size=1024,remat_attention='nothing_saveable',scan_mlp=True,scan_mlp_chunk_size=8192,remat_mlp='nothing_saveable',remat_block='nothing_saveable',scan_layers=True)"
+  --update_llama_config="dict(action_vocab_size=${ACTION_VOCAB_SIZE},depth_feature_dim=${DEPTH_FEATURE_DIM},action_fusion_method='${ACTION_FUSION_METHOD}',delta_vocab_size=8,theta=50000000,max_sequence_length=2048,use_flash_attention=True,scan_attention=True,scan_query_chunk_size=512,scan_key_chunk_size=1024,remat_attention='nothing_saveable',scan_mlp=True,scan_mlp_chunk_size=8192,remat_mlp='nothing_saveable',remat_block='nothing_saveable',scan_layers=True)"
   --tokenizer.vocab_file="$TOKENIZER_PATH"
   --optimizer.type="adamw"
   --llama.action_vocab_size="$ACTION_VOCAB_SIZE"
@@ -208,6 +249,7 @@ fi
 
 echo "[train-depth-suite] suite: $SUITE"
 echo "[train-depth-suite] stage25 model: $STAGE25_MODEL_NAME"
+echo "[train-depth-suite] action fusion: $ACTION_FUSION_METHOD"
 echo "[train-depth-suite] train jsonl: $TRAIN_JSONL"
 echo "[train-depth-suite] image root: $IMAGE_ROOT"
 echo "[train-depth-suite] action bins: $ACTION_SCALE_FILE"

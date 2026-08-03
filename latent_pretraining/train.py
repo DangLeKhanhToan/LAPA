@@ -942,10 +942,37 @@ def main(argv):
             )
             missing_keys = []
             for key, value in flattened_target.items():
+                key_name = "/".join(str(part) for part in key)
+                if (
+                    key in flattend_train_state
+                    and hasattr(flattend_train_state[key], "shape")
+                    and hasattr(value, "shape")
+                ):
+                    loaded_shape = tuple(flattend_train_state[key].shape)
+                    target_shape = tuple(value.shape)
+                    if loaded_shape != target_shape:
+                        if key_name == "action_head/kernel":
+                            # Switching project (4096-D) <-> concat (5120-D)
+                            # intentionally changes only the action-head input
+                            # dimension. Reinitialize this head from the Stage-2
+                            # checkpoint while preserving the backbone.
+                            del flattend_train_state[key]
+                            _runtime_log(
+                                "checkpoint_reinitialize_shape_mismatch",
+                                {
+                                    "key": key_name,
+                                    "loaded_shape": loaded_shape,
+                                    "target_shape": target_shape,
+                                },
+                            )
+                        else:
+                            raise ValueError(
+                                f"Checkpoint shape mismatch for {key_name}: "
+                                f"loaded={loaded_shape}, expected={target_shape}"
+                            )
                 if key not in flattend_train_state and value == empty_node:
                     flattend_train_state[key] = value
                 elif key not in flattend_train_state:
-                    key_name = "/".join(str(part) for part in key)
                     missing_index = len(missing_keys)
                     missing_keys.append(key_name)
                     rng = jax.random.fold_in(

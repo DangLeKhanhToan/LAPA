@@ -2192,20 +2192,43 @@ class JsonDeltaActionDataset(object):
                 DEPTH_FEATURE_CANDIDATES,
             )
 
-            depth_manifest_path = (
-                Path(self.config.depth_feature_manifest)
-                if self.config.depth_feature_manifest
-                else None
-            )
-            depth_manifest = load_manifest(depth_manifest_path)
-            depth_part_files = discover_part_files(
-                Path(self.config.depth_feature_data_dir),
-                depth_manifest_path,
-            )
+            # A comma-separated list allows one merged policy to train from
+            # per-suite Stage-2.5 shard directories without copying large .pt
+            # files into a new directory. A single path remains fully backward
+            # compatible.
+            depth_dirs = [
+                Path(value.strip())
+                for value in str(self.config.depth_feature_data_dir).split(",")
+                if value.strip()
+            ]
+            manifest_values = [
+                value.strip()
+                for value in str(self.config.depth_feature_manifest).split(",")
+                if value.strip()
+            ]
+            if manifest_values and len(manifest_values) not in (1, len(depth_dirs)):
+                raise ValueError(
+                    "depth_feature_manifest must contain either one path or one "
+                    "comma-separated path per depth feature directory"
+                )
+            depth_part_files = []
+            manifests = []
+            for index, depth_dir in enumerate(depth_dirs):
+                manifest_path = None
+                if manifest_values:
+                    manifest_path = Path(
+                        manifest_values[index] if len(manifest_values) > 1 else manifest_values[0]
+                    )
+                manifest = load_manifest(manifest_path)
+                manifests.append(manifest)
+                depth_part_files.extend(discover_part_files(depth_dir, manifest_path))
             if not depth_part_files:
                 raise FileNotFoundError(
                     f"No depth .pt/.pth part files found under {self.config.depth_feature_data_dir}"
                 )
+            # Shards generated for all suites use the same field schema. Avoid
+            # applying a suite-specific manifest index to the combined list.
+            depth_manifest = manifests[0] if len(depth_dirs) == 1 else None
             first_shard = torch.load(depth_part_files[0], map_location="cpu")
             depth_feature_key = self.config.depth_feature_key
             if depth_feature_key == "auto":
@@ -2228,7 +2251,7 @@ class JsonDeltaActionDataset(object):
                             "samples": len(self._depth_index),
                             "feature_key": depth_feature_key,
                             "id_key": self._depth_index.id_key,
-                            "data_dir": self.config.depth_feature_data_dir,
+                            "data_dirs": [str(path) for path in depth_dirs],
                         }
                     }
                 )

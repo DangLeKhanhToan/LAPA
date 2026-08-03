@@ -27,12 +27,19 @@ VIDEO_LLAMA_STANDARD_CONFIGS = LLAMA_STANDARD_CONFIGS
 class VideoLLaMAConfig(LLaMAConfig):
     model_type = "video_llama"
 
-    def __init__(self, vision_vocab_size=8448, tie_vision_embeddings=False, action_vocab_size=256, sample_mode='all', **kwargs):
+    def __init__(self, vision_vocab_size=8448, tie_vision_embeddings=False, action_vocab_size=256, depth_feature_dim=1024, action_fusion_method="project", sample_mode='all', **kwargs):
         super().__init__(**kwargs)
         self.vision_vocab_size = vision_vocab_size # 8192 + 256
         self.tie_vision_embeddings = tie_vision_embeddings
         self.sample_mode = sample_mode
         self.action_vocab_size = action_vocab_size
+        self.depth_feature_dim = depth_feature_dim
+        if action_fusion_method not in ("project", "concat"):
+            raise ValueError(
+                "action_fusion_method must be 'project' or 'concat', "
+                f"got {action_fusion_method!r}"
+            )
+        self.action_fusion_method = action_fusion_method
 
     @staticmethod
     def get_partition_rules(scan_layers=False, scan_axis=0):
@@ -165,7 +172,7 @@ class FlaxVideoLLaMAPreTrainedModel(FlaxPreTrainedModel):
             input_ids=input_ids,
             vision_masks=vision_masks,
             action_masks=action_masks,
-            depth_features=None,
+            depth_features=jnp.zeros((batch_size, self.config.depth_feature_dim), dtype="f4"),
             attention_mask=attention_mask,
             segment_ids=segment_ids,
             position_ids=position_ids,
@@ -190,7 +197,7 @@ class FlaxVideoLLaMAPreTrainedModel(FlaxPreTrainedModel):
             input_ids=input_ids,
             vision_masks=vision_masks,
             action_masks=action_masks,
-            depth_features=None,
+            depth_features=jnp.zeros((input_shape[0], self.config.depth_feature_dim), dtype="f4"),
             attention_mask=attention_mask,
             segment_ids=segment_ids,
             position_ids=position_ids,
@@ -428,14 +435,15 @@ class FlaxActionLaMAForCausalLMModule(nn.Module):
             kernel_init=jax.nn.initializers.normal(stddev=self.config.initializer_range),
             precision=self.precision,
         )
-        self.depth_action_proj = nn.Dense(
-            self.config.hidden_size,
-            dtype=self.dtype,
-            param_dtype=self.param_dtype,
-            use_bias=False,
-            kernel_init=jax.nn.initializers.normal(stddev=self.config.initializer_range),
-            precision=self.precision,
-        )
+        if self.config.action_fusion_method == "project":
+            self.depth_action_proj = nn.Dense(
+                self.config.hidden_size,
+                dtype=self.dtype,
+                param_dtype=self.param_dtype,
+                use_bias=False,
+                kernel_init=jax.nn.initializers.normal(stddev=self.config.initializer_range),
+                precision=self.precision,
+            )
 
     def __call__(
         self,
@@ -494,11 +502,34 @@ class FlaxActionLaMAForCausalLMModule(nn.Module):
             lm_logits = self.lm_head(hidden_states)
 
         
-        action_hidden_states = hidden_states
-        if depth_features is not None:
-            depth_context = self.depth_action_proj(depth_features).astype(hidden_states.dtype)
-            action_hidden_states = hidden_states + depth_context[:, None, :]
+        if depth_features is None and self.config.action_fusion_method == "project":
+            action_hidden_states = hidden_states
+        else:
+            if depth_features is None:
+                depth_features = jnp.zeros(
+                    (batch_size, self.config.depth_feature_dim), dtype=hidden_states.dtype
+                )
+            if depth_features.ndim != 2 or depth_features.shape[-1] != self.config.depth_feature_dim:
+                raise ValueError(
+                    "depth_features must have shape "
+                    f"[batch, {self.config.depth_feature_dim}], got {depth_features.shape}"
+                )
+            depth_features = depth_features.astype(hidden_states.dtype)
+            if self.config.action_fusion_method == "project":
+                depth_context = self.depth_action_proj(depth_features).astype(hidden_states.dtype)
+                action_hidden_states = hidden_states + depth_context[:, None, :]
+            else:
+                depth_context = jnp.broadcast_to(
+                    depth_features[:, None, :],
+                    hidden_states.shape[:-1] + (self.config.depth_feature_dim,),
+                )
+                action_hidden_states = jnp.concatenate([hidden_states, depth_context], axis=-1)
 
+        if self.config.tie_vision_embeddings and self.config.action_fusion_method == "concat":
+            raise ValueError(
+                "The concat action head cannot share the smaller action-token "
+                "embedding kernel. Set tie_vision_embeddings=False."
+            )
         if self.config.tie_vision_embeddings:
             shared_kernel = self.transformer.variables["params"]["ate"]["embedding"].T
             action_logits = self.action_head.apply({"params": {"kernel": shared_kernel}}, action_hidden_states)

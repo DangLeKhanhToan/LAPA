@@ -6,15 +6,20 @@ PROJECT_DIR="$( cd -- "$( dirname -- "$SCRIPT_DIR" )" &> /dev/null && pwd )"
 cd "$PROJECT_DIR"
 
 LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
-SUITES="${SUITES:-libero_spatial libero_object libero_goal libero_90}"
+SUITES="${SUITES:-libero_object libero_spatial libero_goal libero_10}"
 TASK_IDS="${TASK_IDS:-0 1 2 3 4 5 6 7 8 9}"
 N_EVAL_PER_TASK="${N_EVAL_PER_TASK:-10}"
 MAX_STEPS="${MAX_STEPS:-500}"
 PROGRESS_FREQ="${PROGRESS_FREQ:-25}"
 OUTPUT_PREFIX="${OUTPUT_PREFIX:-eval_split}"
 CKPT_ROOT="${CKPT_ROOT:-$LAPA_ROOT/lapa_checkpoints/stage_3_depth_inject/lapa-depth_stage3}"
+SHARED_CHECKPOINT="${SHARED_CHECKPOINT:-}"
 
 checkpoint_for_suite() {
+  if [[ -n "$SHARED_CHECKPOINT" ]]; then
+    echo "${SHARED_CHECKPOINT#params::}"
+    return
+  fi
   local suffix="${1#libero_}"
   case "$1" in
     libero_spatial|libero_object|libero_goal) echo "$CKPT_ROOT/128_batch_${suffix}" ;;
@@ -27,6 +32,15 @@ checkpoint_for_suite() {
         echo "$CKPT_ROOT/streaming_params"
       fi
       ;;
+    libero_10)
+      if [[ -d "$CKPT_ROOT/128_batch_10" ]]; then
+        echo "$CKPT_ROOT/128_batch_10"
+      elif [[ -d "$CKPT_ROOT/128_batch_libero_10" ]]; then
+        echo "$CKPT_ROOT/128_batch_libero_10"
+      else
+        echo "$CKPT_ROOT/streaming_params"
+      fi
+      ;;
     *) echo "" ;;
   esac
 }
@@ -35,6 +49,7 @@ echo "[multi-suite] suites: $SUITES"
 echo "[multi-suite] task_ids: $TASK_IDS"
 echo "[multi-suite] n_eval_per_task: $N_EVAL_PER_TASK"
 echo "[multi-suite] max_steps: $MAX_STEPS"
+echo "[multi-suite] shared checkpoint: ${SHARED_CHECKPOINT:-<per-suite legacy checkpoints>}"
 
 for suite in $SUITES; do
   ckpt="$(checkpoint_for_suite "$suite")"
