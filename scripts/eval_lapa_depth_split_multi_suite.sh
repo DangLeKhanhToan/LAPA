@@ -6,55 +6,31 @@ PROJECT_DIR="$( cd -- "$( dirname -- "$SCRIPT_DIR" )" &> /dev/null && pwd )"
 cd "$PROJECT_DIR"
 
 LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
-SUITES="${SUITES:-libero_object libero_spatial libero_goal libero_10}"
+SUITES="${SUITES:?Set SUITES to a space-separated list of evaluation splits}"
 TASK_IDS="${TASK_IDS:-0 1 2 3 4 5 6 7 8 9}"
 N_EVAL_PER_TASK="${N_EVAL_PER_TASK:-10}"
 MAX_STEPS="${MAX_STEPS:-500}"
 PROGRESS_FREQ="${PROGRESS_FREQ:-25}"
 OUTPUT_PREFIX="${OUTPUT_PREFIX:-eval_split}"
-CKPT_ROOT="${CKPT_ROOT:-$LAPA_ROOT/lapa_checkpoints/stage_3_depth_inject/lapa-depth_stage3}"
-SHARED_CHECKPOINT="${SHARED_CHECKPOINT:-}"
-
-checkpoint_for_suite() {
-  if [[ -n "$SHARED_CHECKPOINT" ]]; then
-    echo "${SHARED_CHECKPOINT#params::}"
-    return
-  fi
-  local suffix="${1#libero_}"
-  case "$1" in
-    libero_spatial|libero_object|libero_goal) echo "$CKPT_ROOT/128_batch_${suffix}" ;;
-    libero_90)
-      if [[ -d "$CKPT_ROOT/128_batch_90" ]]; then
-        echo "$CKPT_ROOT/128_batch_90"
-      elif [[ -d "$CKPT_ROOT/128_batch_libero_90" ]]; then
-        echo "$CKPT_ROOT/128_batch_libero_90"
-      else
-        echo "$CKPT_ROOT/streaming_params"
-      fi
-      ;;
-    libero_10)
-      if [[ -d "$CKPT_ROOT/128_batch_10" ]]; then
-        echo "$CKPT_ROOT/128_batch_10"
-      elif [[ -d "$CKPT_ROOT/128_batch_libero_10" ]]; then
-        echo "$CKPT_ROOT/128_batch_libero_10"
-      else
-        echo "$CKPT_ROOT/streaming_params"
-      fi
-      ;;
-    *) echo "" ;;
-  esac
-}
+SHARED_CHECKPOINT="${SHARED_CHECKPOINT:?Set SHARED_CHECKPOINT to the policy parameter directory}"
+ACTION_SCALE_FILE_TEMPLATE="${ACTION_SCALE_FILE_TEMPLATE:?Set ACTION_SCALE_FILE_TEMPLATE with a literal {suite} placeholder}"
+EVAL_OUTPUT_ROOT="${EVAL_OUTPUT_ROOT:?Set EVAL_OUTPUT_ROOT to a writable directory}"
 
 echo "[multi-suite] suites: $SUITES"
 echo "[multi-suite] task_ids: $TASK_IDS"
 echo "[multi-suite] n_eval_per_task: $N_EVAL_PER_TASK"
 echo "[multi-suite] max_steps: $MAX_STEPS"
-echo "[multi-suite] shared checkpoint: ${SHARED_CHECKPOINT:-<per-suite legacy checkpoints>}"
+echo "[multi-suite] shared checkpoint: $SHARED_CHECKPOINT"
 
 for suite in $SUITES; do
-  ckpt="$(checkpoint_for_suite "$suite")"
-  if [[ -z "$ckpt" || ! -d "$ckpt" ]]; then
-    echo "[multi-suite] ERROR: checkpoint not found for $suite: $ckpt" >&2
+  ckpt="${SHARED_CHECKPOINT#params::}"
+  if [[ ! -d "$ckpt" ]]; then
+    echo "[multi-suite] ERROR: checkpoint not found: $ckpt" >&2
+    exit 1
+  fi
+  action_scale_file="${ACTION_SCALE_FILE_TEMPLATE//\{suite\}/$suite}"
+  if [[ ! -f "$action_scale_file" ]]; then
+    echo "[multi-suite] ERROR: action-bin file not found: $action_scale_file" >&2
     exit 1
   fi
 
@@ -70,11 +46,12 @@ for suite in $SUITES; do
 
   export SUITE="$suite"
   export FINETUNED_CHECKPOINT="params::$ckpt"
+  export ACTION_SCALE_FILE="$action_scale_file"
   export TASK_IDS="$TASK_IDS"
   export N_EVAL_PER_TASK="$N_EVAL_PER_TASK"
   export MAX_STEPS="$MAX_STEPS"
   export PROGRESS_FREQ="$PROGRESS_FREQ"
-  export OUTPUT_DIR="$LAPA_ROOT/outputs/${OUTPUT_PREFIX}_${suite}_tasks$(echo "$TASK_IDS" | wc -w)_eps${N_EVAL_PER_TASK}"
+  export OUTPUT_DIR="$EVAL_OUTPUT_ROOT/${OUTPUT_PREFIX}_${suite}_tasks$(echo "$TASK_IDS" | wc -w)_eps${N_EVAL_PER_TASK}"
 
   bash "$SCRIPT_DIR/eval_lapa_depth_split_online_rollout.sh"
 done

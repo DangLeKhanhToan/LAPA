@@ -4,6 +4,19 @@ This archive contains anonymized supplementary code for the LAPA-Depth experimen
 
 The archive is intended for double-blind review. It does not include author names, institution names, private paths, git history, experiment logs, large datasets, or full model checkpoints.
 
+## Configuration and Anonymity Policy
+
+Public scripts contain no laboratory filesystem layout, scheduler account,
+queue name, host name, or experiment-specific checkpoint name. All external
+resources are supplied through environment variables. The scripts fail with a
+descriptive message when a required variable is missing instead of guessing a
+private path.
+
+Scheduler submission files (for example PBS/QSUB jobs), local `.env` files,
+one-off smoke-training utilities, and machine-specific wrappers are deliberately
+excluded by `.gitignore`. Maintain those files outside Git or under an ignored
+local directory such as `scripts/local/`.
+
 ## Contents
 
 ```text
@@ -88,40 +101,24 @@ Otherwise, the scripts use the active `python`.
 
 The full LIBERO dataset, pretrained LAPA checkpoints, Stage-2.5 checkpoints, DepthAnythingV2 checkpoint, and precomputed depth features are not included in this archive because they exceed the 50 MB supplementary limit.
 
-Prepare the following layout before training or evaluation:
+The repository does not prescribe a private directory layout. Keep data and
+checkpoints outside the source tree when possible and provide their locations
+through environment variables. A generic external layout could be:
 
 ```text
-datasets/
-  LIBERO/
-  lapa_libero_v2/
-    images/
-    libero_spatial.jsonl
-    libero_object.jsonl
-    libero_goal.jsonl
-    libero_90.jsonl
-    action_bins_libero_spatial.csv
-    action_bins_libero_object.csv
-    action_bins_libero_goal.csv
-    action_bins_libero_90.csv
-  features_depth_branch/
-    stage25_libero_features_model2/
-    stage25_libero_features_model4/
-    stage25_libero_features_model5/
+<private-data-root>/
+  images/
+  <train-split>.jsonl
+  <evaluation-split>.jsonl
+  <evaluation-bin-edges>.csv
+  <depth-feature-shards>/
 
-lapa_checkpoints/
-  tokenizer.model
-  vqgan/
-  base_lapa/
-  depth_model/
-    model2.65000.pt
-    model4.65000.pt
-    model5.65000.pt
-  stage_3_depth_inject/
-    lapa-depth_stage3/
-
-checkpoints/
-  depth_anything_v2_sth2sth/
-    depth_anything_v2_sth2sth.pth
+<private-checkpoint-root>/
+  <tokenizer-model>
+  <visual-tokenizer-checkpoint>/
+  <base-policy-parameters>/
+  <stage25-checkpoint>
+  <depth-estimator-checkpoint>
 ```
 
 The training JSONL files should contain one robot demonstration frame per line with at least:
@@ -138,9 +135,10 @@ Before launching training, verify that JSONL samples and depth-feature shards al
 
 ```bash
 export SUITE=libero_spatial
-export LAPA_JSONL="$LAPA_ROOT/datasets/lapa_libero_v2/${SUITE}.jsonl"
-export DEPTH_DATA_DIR="$LAPA_ROOT/datasets/features_depth_branch/stage25_libero_features_model4/${SUITE}/stage25_model4/z_depth_train_shard0"
-export DEPTH_MANIFEST="$DEPTH_DATA_DIR/z_depth_train_shard0_model4_manifest.json"
+export LAPA_JSONL=/path/to/prepared/train.jsonl
+export DEPTH_DATA_DIR=/path/to/depth/feature/shards
+# Optional; omit this argument when shards are self-describing.
+export DEPTH_MANIFEST=/path/to/depth/feature/manifest.json
 
 python -m latent_pretraining.depth_fusion.inspect_lapa_depth_alignment \
   --jsonl "$LAPA_JSONL" \
@@ -152,35 +150,36 @@ The expected match rate is close to `1.0`.
 
 ## Stage-3 Training
 
-Run one suite at a time:
+Configure all external paths explicitly, then launch training:
 
 ```bash
-export SUITE=libero_spatial
-export STAGE25_MODEL_NAME=model4
+export SUITE=<anonymous-split-name>
+export STAGE25_MODEL_NAME=<feature-extractor-name>
+export TRAIN_JSONL=/path/to/prepared/train.jsonl
+export IMAGE_ROOT=/path/to/image/root
+export DEPTH_DATA_DIR=/path/to/depth/feature/shards
+# For an aggregate dataset, provide a comma-separated directory list:
+# export DEPTH_DATA_DIR=/path/to/shards-a,/path/to/shards-b
+export DEPTH_MANIFEST=                         # optional
+export ACTION_SCALE_FILE=/path/to/bin-edges.csv
+# Alternatively set ACTION_VOCAB_SIZE directly for an aggregate dataset.
+export TOKENIZER_PATH=/path/to/tokenizer.model
+export VQGAN_CKPT=/path/to/visual/tokenizer/checkpoint
+export LAPA_PARAMS=/path/to/base/policy/parameters
+export OUTPUT_DIR=/path/to/output/root
+export EXPERIMENT_ID=<anonymous-run-id>
+export ACTION_FUSION_METHOD=project            # project or concat
 export TOTAL_STEPS=20000
 export BATCH_SIZE=128
 export MESH_DIM='!-1,4,1,1'
-export EXPERIMENT_ID="stage3_${STAGE25_MODEL_NAME}_${SUITE}"
 
 bash scripts/train_lapa_depth_suite.sh
 ```
 
-Common suite values:
-
-```text
-libero_spatial
-libero_object
-libero_goal
-libero_90
-```
-
-Common Stage-2.5 model values:
-
-```text
-model2
-model4
-model5
-```
+`project` is the backward-compatible default. `concat` concatenates the
+4096-dimensional Stage-2 representation and the 1024-dimensional Stage-2.5
+feature before the action head. The feature dimension is configurable; these
+numbers describe the released experimental configuration.
 
 The main paper setting uses:
 
@@ -205,11 +204,20 @@ outputs/<EXPERIMENT_ID>/
 Run split online rollout for one suite:
 
 ```bash
-export SUITE=libero_spatial
-export STAGE25_MODEL_NAME=model4
-
-export FINETUNED_CHECKPOINT="params::$LAPA_ROOT/lapa_checkpoints/stage_3_depth_inject/lapa-depth_stage3/128_batch_spatial/streaming_params"
-export ORIGINAL_LAPA_CHECKPOINT="params::$LAPA_ROOT/lapa_checkpoints/base_lapa/streaming_params"
+export SUITE=<evaluation-split-name>
+export STAGE25_MODEL_NAME=<feature-extractor-name>
+export ACTION_FUSION_METHOD=project            # must match training
+export FINETUNED_CHECKPOINT=params::/path/to/fine-tuned/parameters
+export ORIGINAL_LAPA_CHECKPOINT=params::/path/to/base/policy/parameters
+export ACTION_SCALE_FILE=/path/to/evaluation/bin-edges.csv
+export STAGE25_MODEL_CHECKPOINT=/path/to/stage25/checkpoint
+export VQGAN_CHECKPOINT=/path/to/visual/tokenizer/checkpoint
+export VOCAB_FILE=/path/to/tokenizer.model
+export DEPTH_BRANCH_ROOT=/path/to/stage25/source/bundle
+export LIBERO_REPO=/path/to/simulator/repository
+export DEPTH_ESTIMATOR_REQUIRED=true
+export DEPTH_ANYTHING_REPO_DIR=/path/to/depth/estimator/source
+export DEPTH_ANYTHING_CHECKPOINT=/path/to/depth/estimator/checkpoint
 
 export POLICY_CUDA_VISIBLE_DEVICES=0
 export STAGE25_CUDA_VISIBLE_DEVICES=1
@@ -220,7 +228,8 @@ export TASK_IDS="0 1 2 3 4 5 6 7 8 9"
 export N_EVAL_PER_TASK=10
 export MAX_STEPS=500
 export PROGRESS_FREQ=25
-export OUTPUT_DIR="$LAPA_ROOT/outputs/eval_${SUITE}_${STAGE25_MODEL_NAME}"
+export OUTPUT_DIR=/path/to/evaluation/output
+export LOG_DIR=/path/to/server/logs
 
 bash scripts/eval_lapa_depth_split_online_rollout.sh
 ```
@@ -228,7 +237,10 @@ bash scripts/eval_lapa_depth_split_online_rollout.sh
 Run multiple suites:
 
 ```bash
-export SUITES="libero_spatial libero_object libero_goal"
+export SUITES="<split-a> <split-b> <split-c>"
+export SHARED_CHECKPOINT=/path/to/fine-tuned/parameters
+export ACTION_SCALE_FILE_TEMPLATE='/path/to/bin-edges/{suite}.csv'
+export EVAL_OUTPUT_ROOT=/path/to/evaluation/output/root
 export TASK_IDS="0 1 2 3 4 5 6 7 8 9"
 export N_EVAL_PER_TASK=10
 export MAX_STEPS=500
@@ -239,37 +251,12 @@ bash scripts/eval_lapa_depth_split_multi_suite.sh
 
 Task IDs must be separated by spaces.
 
-## Reproducing Main Table Results
+## Reproducing Evaluation Results
 
-The following commands reproduce the per-suite rollout measurements after checkpoints and data are prepared:
-
-```bash
-# LAPA-Depth Model 2
-export STAGE25_MODEL_NAME=model2
-export SUITES="libero_spatial libero_object libero_goal"
-bash scripts/eval_lapa_depth_split_multi_suite.sh
-
-# LAPA-Depth Model 4
-export STAGE25_MODEL_NAME=model4
-export SUITES="libero_spatial libero_object libero_goal"
-bash scripts/eval_lapa_depth_split_multi_suite.sh
-
-# LAPA-Depth Model 5
-export STAGE25_MODEL_NAME=model5
-export SUITES="libero_spatial libero_object libero_goal"
-bash scripts/eval_lapa_depth_split_multi_suite.sh
-```
-
-Expected success rates:
-
-| Method | Spatial | Object | Goal | Average |
-| --- | ---: | ---: | ---: | ---: |
-| LAPA baseline | 52% | 64% | 58% | 58.0% |
-| LAPA-Depth Model 2 | 61% | 69% | 61% | 63.7% |
-| LAPA-Depth Model 4 | 54% | 67% | 67% | 62.7% |
-| LAPA-Depth Model 5 | 38% | 57% | 53% | 49.3% |
-
-Minor variation is expected due to simulator randomness, GPU kernels, and environment setup.
+Use the same feature-extractor configuration and `ACTION_FUSION_METHOD` used
+during training. Supply one bin-edge CSV per evaluation split through
+`ACTION_SCALE_FILE_TEMPLATE`. Minor variation is expected due to simulator
+randomness, GPU kernels, and environment setup.
 
 ## Expected Outputs
 
@@ -289,7 +276,7 @@ outputs/<evaluation_id>/summary.json
 outputs/server_logs/
 ```
 
-Videos and full rollout traces should not be included in the AAAI supplementary archive unless they are very small and explicitly needed.
+Videos and full rollout traces should not be included in a supplementary archive unless they are very small and explicitly needed.
 
 ## Approximate Runtime
 
@@ -330,9 +317,7 @@ zip -r code_data_supplement.zip LAPA \
      "*/lapa_checkpoints/*" \
      "*/outputs/*" \
      "*/rollouts/*" \
-     "*/datasets/LIBERO/*" \
-     "*/datasets/lapa_libero_v2/images/*" \
-     "*/datasets/features_depth_branch/*"
+     "*/datasets/*"
 ```
 
 Verify the archive size:
@@ -361,7 +346,7 @@ Suggested checks:
 
 ```bash
 find LAPA -name ".git" -o -name "__pycache__" -o -name "wandb"
-grep -R "home/users\|scratch/users\|C:\\\\Users\|D:\\\\Project" LAPA || true
+grep -R -E '(/home/|/Users/|[A-Za-z]:\\)' LAPA || true
 ```
 
 ## License

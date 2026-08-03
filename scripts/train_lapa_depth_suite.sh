@@ -8,98 +8,33 @@ export PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}"
 export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_megacore_fusion_allow_ags=false --xla_enable_async_collective_permute=true --xla_tpu_enable_ag_backward_pipelining=true --xla_tpu_enable_data_parallel_all_reduce_opt=true --xla_tpu_data_parallel_opt_different_sized_ops=true --xla_tpu_enable_async_collective_fusion=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_overlap_compute_collective_tc=true --xla_enable_async_all_gather=true}"
 
 LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
-SUITE="${SUITE:-libero_90}"
-STAGE25_MODEL_NAME="${STAGE25_MODEL_NAME:-model4}"
-DATA_ROOT="${DATA_ROOT:-$LAPA_ROOT/datasets/lapa_libero_v2}"
+SUITE="${SUITE:?Set SUITE to the training split or aggregate name}"
+STAGE25_MODEL_NAME="${STAGE25_MODEL_NAME:?Set STAGE25_MODEL_NAME to the configured feature extractor name}"
+TRAIN_JSONL="${TRAIN_JSONL:?Set TRAIN_JSONL to the prepared training JSONL}"
+IMAGE_ROOT="${IMAGE_ROOT:?Set IMAGE_ROOT to the root used by image paths in TRAIN_JSONL}"
+DEPTH_DATA_DIR="${DEPTH_DATA_DIR:?Set DEPTH_DATA_DIR to one directory or a comma-separated directory list}"
+DEPTH_MANIFEST="${DEPTH_MANIFEST:-}"
+ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-}"
 ACTION_FUSION_METHOD="${ACTION_FUSION_METHOD:-project}"
 case "$ACTION_FUSION_METHOD" in
   project|concat) ;;
   *) echo "ERROR: ACTION_FUSION_METHOD must be project or concat" >&2; exit 1 ;;
 esac
 
-MERGED_SUITES="${MERGED_SUITES:-libero_goal libero_object libero_spatial libero_90}"
-if [[ "$SUITE" == "libero_all" || "$SUITE" == "merged" ]]; then
-  MERGED_DATA_DIR="${MERGED_DATA_DIR:-$LAPA_ROOT/outputs/merged_datasets}"
-  mkdir -p "$MERGED_DATA_DIR"
-  TRAIN_JSONL="${TRAIN_JSONL:-$MERGED_DATA_DIR/libero_all.jsonl}"
-  : > "$TRAIN_JSONL"
-  for merged_suite in $MERGED_SUITES; do
-    source_jsonl="$DATA_ROOT/${merged_suite}.jsonl"
-    [[ -f "$source_jsonl" ]] || { echo "ERROR: merged-suite JSONL not found: $source_jsonl" >&2; exit 1; }
-    sed '/^[[:space:]]*$/d' "$source_jsonl" >> "$TRAIN_JSONL"
-  done
-else
-  TRAIN_JSONL="${TRAIN_JSONL:-$DATA_ROOT/${SUITE}.jsonl}"
-fi
-if [[ -z "${IMAGE_ROOT:-}" ]]; then
-  if [[ -d "$DATA_ROOT/images" ]]; then
-    IMAGE_ROOT="$DATA_ROOT/"
-  else
-    IMAGE_ROOT="$LAPA_ROOT/datasets/libero_data/"
-  fi
-fi
-ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$DATA_ROOT/action_bins_${SUITE}.csv}"
-DEPTH_BASE_DIR="${DEPTH_BASE_DIR:-$LAPA_ROOT/datasets/features_depth_branch/stage25_libero_features_${STAGE25_MODEL_NAME}/${SUITE}/stage25_${STAGE25_MODEL_NAME}}"
-DEPTH_DATA_DIR="${DEPTH_DATA_DIR:-}"
-DEPTH_MANIFEST="${DEPTH_MANIFEST:-}"
-
-if [[ -z "$DEPTH_DATA_DIR" ]]; then
-  if [[ "$SUITE" == "libero_all" || "$SUITE" == "merged" ]]; then
-    depth_dirs=()
-    for merged_suite in $MERGED_SUITES; do
-      suite_depth_base="$LAPA_ROOT/datasets/features_depth_branch/stage25_libero_features_${STAGE25_MODEL_NAME}/${merged_suite}/stage25_${STAGE25_MODEL_NAME}"
-      if compgen -G "$suite_depth_base/*_part*.pt" >/dev/null || compgen -G "$suite_depth_base/*_part*.pth" >/dev/null; then
-        depth_dirs+=("$suite_depth_base")
-      elif [[ -d "$suite_depth_base/z_depth_train_shard0" ]]; then
-        depth_dirs+=("$suite_depth_base/z_depth_train_shard0")
-      else
-        echo "ERROR: depth feature directory not found for $merged_suite: $suite_depth_base" >&2
-        exit 1
-      fi
-    done
-    DEPTH_DATA_DIR="$(IFS=,; echo "${depth_dirs[*]}")"
-  elif compgen -G "$DEPTH_BASE_DIR/*_part*.pt" >/dev/null || compgen -G "$DEPTH_BASE_DIR/*_part*.pth" >/dev/null; then
-      DEPTH_DATA_DIR="$DEPTH_BASE_DIR"
-  elif [[ -d "$DEPTH_BASE_DIR/z_depth_train_shard0" ]]; then
-      DEPTH_DATA_DIR="$DEPTH_BASE_DIR/z_depth_train_shard0"
-  else
-      DEPTH_DATA_DIR="$DEPTH_BASE_DIR"
-  fi
-fi
-
-if [[ -z "$DEPTH_MANIFEST" ]]; then
-  for candidate in \
-    "$DEPTH_DATA_DIR/z_depth_train_model4_manifest.json" \
-    "$DEPTH_DATA_DIR/z_depth_train_shard0_model4_manifest.json" \
-    "$DEPTH_DATA_DIR"/*_manifest.json; do
-    if [[ -f "$candidate" ]]; then
-      DEPTH_MANIFEST="$candidate"
-      break
-    fi
-  done
-fi
-
 if [[ ! -f "$TRAIN_JSONL" ]]; then
   echo "ERROR: train JSONL not found: $TRAIN_JSONL" >&2
   exit 1
 fi
-if [[ "$SUITE" != "libero_all" && "$SUITE" != "merged" && ! -f "$ACTION_SCALE_FILE" ]]; then
+if [[ -n "$ACTION_SCALE_FILE" && ! -f "$ACTION_SCALE_FILE" ]]; then
   echo "ERROR: action bins CSV not found: $ACTION_SCALE_FILE" >&2
   exit 1
 fi
-if [[ "$SUITE" == "libero_all" || "$SUITE" == "merged" ]]; then
-  computed_action_vocab=0
-  for merged_suite in $MERGED_SUITES; do
-    bins_file="$DATA_ROOT/action_bins_${merged_suite}.csv"
-    [[ -f "$bins_file" ]] || { echo "ERROR: action bins not found: $bins_file" >&2; exit 1; }
-    columns="$(head -1 "$bins_file" | awk -F, '{print NF}')"
-    (( columns > computed_action_vocab )) && computed_action_vocab="$columns"
-  done
-  ACTION_SCALE_FILE="<per-suite bins; training uses token IDs>"
-  ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$computed_action_vocab}"
-else
-  [[ -d "$DEPTH_DATA_DIR" ]] || { echo "ERROR: depth feature directory not found: $DEPTH_DATA_DIR" >&2; exit 1; }
-  ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')}"
+if [[ -z "${ACTION_VOCAB_SIZE:-}" ]]; then
+  [[ -n "$ACTION_SCALE_FILE" ]] || {
+    echo "ERROR: set ACTION_VOCAB_SIZE directly, or provide ACTION_SCALE_FILE" >&2
+    exit 1
+  }
+  ACTION_VOCAB_SIZE="$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')"
 fi
 
 # Validate every action token before allocating the 7B model on GPU.  This also
@@ -152,13 +87,13 @@ print(
 )
 PY
 )"
-TOKENIZER_PATH="${TOKENIZER_PATH:-$LAPA_ROOT/lapa_checkpoints/tokenizer.model}"
-VQGAN_CKPT="${VQGAN_CKPT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
-LAPA_PARAMS="${LAPA_PARAMS:-$LAPA_ROOT/lapa_checkpoints/lapa_7b_sth/params}"
-OUTPUT_DIR="${OUTPUT_DIR:-$LAPA_ROOT/outputs}"
-PROJECT_ID="${PROJECT_ID:-lapa_depth}"
-EXPERIMENT_ID="${EXPERIMENT_ID:-lapa_depth_stage3_${SUITE}}"
-EXPERIMENT_NOTE="${EXPERIMENT_NOTE:-stage3_${SUITE}_depth_offline}"
+TOKENIZER_PATH="${TOKENIZER_PATH:?Set TOKENIZER_PATH to the tokenizer model}"
+VQGAN_CKPT="${VQGAN_CKPT:?Set VQGAN_CKPT to the visual tokenizer checkpoint}"
+LAPA_PARAMS="${LAPA_PARAMS:?Set LAPA_PARAMS to the initialization parameter directory}"
+OUTPUT_DIR="${OUTPUT_DIR:?Set OUTPUT_DIR to a writable experiment-output directory}"
+PROJECT_ID="${PROJECT_ID:-depth_policy}"
+EXPERIMENT_ID="${EXPERIMENT_ID:?Set EXPERIMENT_ID to an anonymous run identifier}"
+EXPERIMENT_NOTE="${EXPERIMENT_NOTE:-depth-aware policy fine-tuning}"
 TOTAL_STEPS="${TOTAL_STEPS:-20000}"
 BATCH_SIZE="${BATCH_SIZE:-128}"
 SEQ_LENGTH="${SEQ_LENGTH:-384}"

@@ -8,50 +8,27 @@ export PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}"
 
 MODEL_PY="${MODEL_PY:-python}"
 LIBERO_PY="${LIBERO_PY:-$MODEL_PY}"
-LIBERO_REPO="${LIBERO_REPO:-$PROJECT_DIR/datasets/LIBERO}"
 LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
-DEPTH_BRANCH_ROOT="${DEPTH_BRANCH_ROOT:-$LAPA_ROOT/Depth_branch}"
-SUITE="${SUITE:-libero_spatial}"
-DATA_ROOT="${DATA_ROOT:-$LAPA_ROOT/datasets/lapa_libero_v2}"
+LIBERO_REPO="${LIBERO_REPO:?Set LIBERO_REPO to the simulator repository}"
+DEPTH_BRANCH_ROOT="${DEPTH_BRANCH_ROOT:?Set DEPTH_BRANCH_ROOT to the Stage-2.5 source bundle}"
+SUITE="${SUITE:?Set SUITE to the evaluation split}"
+ACTION_SCALE_FILE="${ACTION_SCALE_FILE:?Set ACTION_SCALE_FILE to this split's bin-edge CSV}"
 ACTION_FUSION_METHOD="${ACTION_FUSION_METHOD:-project}"
 case "$ACTION_FUSION_METHOD" in
   project|concat) ;;
   *) echo "ERROR: ACTION_FUSION_METHOD must be project or concat" >&2; exit 1 ;;
 esac
 
-STAGE3_CKPT_ROOT="${STAGE3_CKPT_ROOT:-$LAPA_ROOT/lapa_checkpoints/stage_3_depth_inject/lapa-depth_stage3}"
-suite_suffix="${SUITE#libero_}"
-if [[ -z "${FINETUNED_CHECKPOINT:-}" ]]; then
-  if [[ -d "$STAGE3_CKPT_ROOT/128_batch_${suite_suffix}" ]]; then
-    FINETUNED_CHECKPOINT="params::$STAGE3_CKPT_ROOT/128_batch_${suite_suffix}"
-  elif [[ -d "$STAGE3_CKPT_ROOT/128_batch_${SUITE}" ]]; then
-    FINETUNED_CHECKPOINT="params::$STAGE3_CKPT_ROOT/128_batch_${SUITE}"
-  elif [[ -d "$LAPA_ROOT/outputs/lapa_depth_stage3_${SUITE}/streaming_params" ]]; then
-    FINETUNED_CHECKPOINT="params::$LAPA_ROOT/outputs/lapa_depth_stage3_${SUITE}/streaming_params"
-  else
-    FINETUNED_CHECKPOINT="params::$STAGE3_CKPT_ROOT/128_batch_${suite_suffix}"
-  fi
-fi
-ORIGINAL_LAPA_CHECKPOINT="${ORIGINAL_LAPA_CHECKPOINT:-params::$LAPA_ROOT/lapa_checkpoints/pretraining_LAPA_Sth2Sth}"
-if [[ -z "${ACTION_SCALE_FILE:-}" ]]; then
-  for candidate in \
-    "$DATA_ROOT/action_bins_${SUITE}.csv" \
-    "$LAPA_ROOT/datasets/lapa_libero_v2/action_bins_${SUITE}.csv" \
-    "$LAPA_ROOT/datasets/lapa_libero/action_bins_${SUITE}.csv"; do
-    if [[ -f "$candidate" ]]; then
-      ACTION_SCALE_FILE="$candidate"
-      break
-    fi
-  done
-  ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$DATA_ROOT/action_bins_${SUITE}.csv}"
-fi
-VQGAN_CHECKPOINT="${VQGAN_CHECKPOINT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
-VOCAB_FILE="${VOCAB_FILE:-$LAPA_ROOT/lapa_checkpoints/tokenizer.model}"
+FINETUNED_CHECKPOINT="${FINETUNED_CHECKPOINT:?Set FINETUNED_CHECKPOINT using the params:: prefix}"
+ORIGINAL_LAPA_CHECKPOINT="${ORIGINAL_LAPA_CHECKPOINT:?Set ORIGINAL_LAPA_CHECKPOINT using the params:: prefix}"
+VQGAN_CHECKPOINT="${VQGAN_CHECKPOINT:?Set VQGAN_CHECKPOINT to the visual tokenizer checkpoint}"
+VOCAB_FILE="${VOCAB_FILE:?Set VOCAB_FILE to the tokenizer model}"
 
-STAGE25_MODEL_NAME="${STAGE25_MODEL_NAME:-model4}"
-STAGE25_MODEL_CHECKPOINT="${STAGE25_MODEL_CHECKPOINT:-$LAPA_ROOT/lapa_checkpoints/depth_model/${STAGE25_MODEL_NAME}.65000.pt}"
-DEPTH_ANYTHING_REPO_DIR="${DEPTH_ANYTHING_REPO_DIR:-$LAPA_ROOT/third_party/depth_anything_v2}"
-DEPTH_ANYTHING_CHECKPOINT="${DEPTH_ANYTHING_CHECKPOINT:-$LAPA_ROOT/checkpoints/depth_anything_v2_sth2sth/depth_anything_v2_sth2sth.pth}"
+STAGE25_MODEL_NAME="${STAGE25_MODEL_NAME:?Set STAGE25_MODEL_NAME to the configured feature extractor name}"
+STAGE25_MODEL_CHECKPOINT="${STAGE25_MODEL_CHECKPOINT:?Set STAGE25_MODEL_CHECKPOINT to its checkpoint file}"
+DEPTH_ESTIMATOR_REQUIRED="${DEPTH_ESTIMATOR_REQUIRED:-true}"
+DEPTH_ANYTHING_REPO_DIR="${DEPTH_ANYTHING_REPO_DIR:-}"
+DEPTH_ANYTHING_CHECKPOINT="${DEPTH_ANYTHING_CHECKPOINT:-}"
 DEPTH_ANYTHING_ENCODER="${DEPTH_ANYTHING_ENCODER:-vitl}"
 DEPTH_ANYTHING_INPUT_SIZE="${DEPTH_ANYTHING_INPUT_SIZE:-518}"
 DEPTH_ANYTHING_DEVICE="${DEPTH_ANYTHING_DEVICE:-cuda}"
@@ -59,8 +36,8 @@ DEPTH_ANYTHING_DEVICE="${DEPTH_ANYTHING_DEVICE:-cuda}"
 POLICY_PORT="${POLICY_PORT:-32820}"
 STAGE25_PORT="${STAGE25_PORT:-32821}"
 RGB_PORT="${RGB_PORT:-32822}"
-OUTPUT_DIR="${OUTPUT_DIR:-$LAPA_ROOT/outputs/eval_lapa_depth_split_online_${SUITE}_${STAGE25_MODEL_NAME}}"
-LOG_DIR="${LOG_DIR:-$LAPA_ROOT/outputs/server_logs}"
+OUTPUT_DIR="${OUTPUT_DIR:?Set OUTPUT_DIR to a writable evaluation-output directory}"
+LOG_DIR="${LOG_DIR:?Set LOG_DIR to a writable server-log directory}"
 
 POLICY_CUDA_VISIBLE_DEVICES="${POLICY_CUDA_VISIBLE_DEVICES:-1}"
 STAGE25_CUDA_VISIBLE_DEVICES="${STAGE25_CUDA_VISIBLE_DEVICES:-0}"
@@ -86,7 +63,9 @@ export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda,cpu}"
 [[ -d "$DEPTH_BRANCH_ROOT" ]] || { echo "ERROR: DEPTH_BRANCH_ROOT not found: $DEPTH_BRANCH_ROOT" >&2; exit 1; }
 [[ -f "$STAGE25_MODEL_CHECKPOINT" ]] || { echo "ERROR: STAGE25_MODEL_CHECKPOINT not found: $STAGE25_MODEL_CHECKPOINT" >&2; exit 1; }
 [[ -f "$ACTION_SCALE_FILE" ]] || { echo "ERROR: ACTION_SCALE_FILE not found: $ACTION_SCALE_FILE" >&2; exit 1; }
-if [[ "$STAGE25_MODEL_NAME" != "model5" ]]; then
+if [[ "$DEPTH_ESTIMATOR_REQUIRED" == "true" ]]; then
+  [[ -n "$DEPTH_ANYTHING_REPO_DIR" ]] || { echo "ERROR: set DEPTH_ANYTHING_REPO_DIR" >&2; exit 1; }
+  [[ -n "$DEPTH_ANYTHING_CHECKPOINT" ]] || { echo "ERROR: set DEPTH_ANYTHING_CHECKPOINT" >&2; exit 1; }
   [[ -d "$DEPTH_ANYTHING_REPO_DIR/depth_anything_v2" ]] || { echo "ERROR: DEPTH_ANYTHING_REPO_DIR is not a DepthAnythingV2 repo: $DEPTH_ANYTHING_REPO_DIR" >&2; exit 1; }
   [[ -f "$DEPTH_ANYTHING_CHECKPOINT" ]] || { echo "ERROR: DEPTH_ANYTHING_CHECKPOINT not found: $DEPTH_ANYTHING_CHECKPOINT" >&2; exit 1; }
 fi
@@ -167,7 +146,7 @@ stage25_args=(
   --port "$STAGE25_PORT"
   --rgb_feature_server_url "http://127.0.0.1:${RGB_PORT}"
 )
-if [[ "$STAGE25_MODEL_NAME" != "model5" ]]; then
+if [[ "$DEPTH_ESTIMATOR_REQUIRED" == "true" ]]; then
   stage25_args+=(
     --depth_anything_repo_dir "$DEPTH_ANYTHING_REPO_DIR"
     --depth_anything_checkpoint "$DEPTH_ANYTHING_CHECKPOINT"
