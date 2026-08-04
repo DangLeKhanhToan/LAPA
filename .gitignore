@@ -6,6 +6,7 @@ outputs/
 results/
 rollouts/
 wandb/
+logs/
 *.pt
 *.pth
 *.ckpt
@@ -21,6 +22,10 @@ scripts/local/
 .env
 .env.*
 !.env.example
+
+# PBS job output/error logs: <name>.o<PID>, <name>.e<PID>
+*.o[0-9]*
+*.e[0-9]*
 
 # One-off smoke/overfit utilities
 **/run_stage25_simple.sh
