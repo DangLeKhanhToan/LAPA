@@ -2226,9 +2226,10 @@ class JsonDeltaActionDataset(object):
                 raise FileNotFoundError(
                     f"No depth .pt/.pth part files found under {self.config.depth_feature_data_dir}"
                 )
-            # Shards generated for all suites use the same field schema. Avoid
-            # applying a suite-specific manifest index to the combined list.
-            depth_manifest = manifests[0] if len(depth_dirs) == 1 else None
+            # Each depth directory is discovered with its own manifest above.
+            # The merged shard list uses a single schema fallback; generated
+            # Stage-2.5 suite shards share id/feature key names.
+            depth_manifest = manifests[0] if manifests else {}
             first_shard = torch.load(depth_part_files[0], map_location="cpu")
             depth_feature_key = self.config.depth_feature_key
             if depth_feature_key == "auto":

@@ -20,6 +20,7 @@ Options:
   --image-root PATH             Image root used by JSONL image paths. Default: <data-root>/.
   --depth-dir PATH              Offline depth-feature directory. Supports comma-separated dirs for concat/all-suite.
   --depth-manifest PATH         Optional depth manifest path. Supports comma-separated manifests.
+                                If omitted, each depth dir is searched for exactly one *manifest.json.
   --action-bins PATH            Action-bin CSV. Default: <data-root>/action_bins_<suite>.csv, else <data-root>/action_bins.csv.
   --tokenizer PATH              Tokenizer model. Default: <root>/lapa_checkpoints/lapa_7b_sth/tokenizer.model, else tokenizer.model.
   --vqgan PATH                  VQGAN checkpoint. Default: <root>/lapa_checkpoints/vqgan.
@@ -83,6 +84,30 @@ resolve_tokenizer() {
   else
     printf '%s' "$root/lapa_checkpoints/tokenizer.model"
   fi
+}
+
+resolve_depth_manifests() {
+  local depth_dirs_csv="$1"
+  local result=""
+  IFS=',' read -ra dirs <<< "$depth_dirs_csv"
+  for dir in "${dirs[@]}"; do
+    dir="${dir#"${dir%%[![:space:]]*}"}"
+    dir="${dir%"${dir##*[![:space:]]}"}"
+    [[ -n "$dir" ]] || continue
+    [[ -d "$dir" ]] || { echo "ERROR: depth dir not found: $dir" >&2; exit 1; }
+    mapfile -t manifests < <(find "$dir" -maxdepth 1 -type f -name '*manifest.json' | sort)
+    if [[ "${#manifests[@]}" -ne 1 ]]; then
+      echo "ERROR: expected exactly one *manifest.json in $dir, found ${#manifests[@]}" >&2
+      printf '  %s\n' "${manifests[@]}" >&2
+      exit 1
+    fi
+    if [[ -z "$result" ]]; then
+      result="${manifests[0]}"
+    else
+      result="$result,${manifests[0]}"
+    fi
+  done
+  printf '%s' "$result"
 }
 
 LAPA_ROOT="$PROJECT_DIR"
@@ -152,6 +177,7 @@ FEATURE_ROOT="${FEATURE_ROOT:-$LAPA_ROOT/datasets/features_depth_branch}"
 TRAIN_JSONL="${TRAIN_JSONL:-$(resolve_train_jsonl "$DATA_ROOT" "$SUITE")}"
 IMAGE_ROOT="${IMAGE_ROOT:-$DATA_ROOT/}"
 DEPTH_DATA_DIR="${DEPTH_DATA_DIR:-$FEATURE_ROOT/stage25_libero_features_${STAGE25_MODEL_NAME}/$SUITE/stage25_${STAGE25_MODEL_NAME}/z_depth_train_shard0}"
+DEPTH_MANIFEST="${DEPTH_MANIFEST:-$(resolve_depth_manifests "$DEPTH_DATA_DIR")}"
 ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$(resolve_action_bins "$DATA_ROOT" "$SUITE")}"
 TOKENIZER_PATH="${TOKENIZER_PATH:-$(resolve_tokenizer "$LAPA_ROOT")}"
 VQGAN_CKPT="${VQGAN_CKPT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
