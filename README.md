@@ -52,79 +52,63 @@ The training JSONL files should contain one robot demonstration frame per line w
 ```
 ## Stage-3 Training
 
-Configure all external paths explicitly, then launch training:
+Launch one suite with explicit command-line configuration:
 
 ```bash
-export SUITE=<anonymous-split-name>
-export STAGE25_MODEL_NAME=<feature-extractor-name>
-export TRAIN_JSONL=/path/to/prepared/train.jsonl
-export IMAGE_ROOT=/path/to/image/root
-export DEPTH_DATA_DIR=/path/to/depth/feature/shards
-# For an aggregate dataset, provide a comma-separated directory list:
-# export DEPTH_DATA_DIR=/path/to/shards-a,/path/to/shards-b
-export DEPTH_MANIFEST=                         # optional
-export ACTION_SCALE_FILE=/path/to/bin-edges.csv
-# Alternatively set ACTION_VOCAB_SIZE directly for an aggregate dataset.
-export TOKENIZER_PATH=/path/to/tokenizer.model
-export VQGAN_CKPT=/path/to/visual/tokenizer/checkpoint
-export LAPA_PARAMS=/path/to/base/policy/parameters
-export OUTPUT_DIR=/path/to/output/root
-export EXPERIMENT_ID=<anonymous-run-id>
-export TOTAL_STEPS=20000
-export BATCH_SIZE=128
-export MESH_DIM='!-1,4,1,1'
-
-bash scripts/train_lapa_depth_suite.sh
+bash scripts/train_lapa_depth_suite.sh \
+  --model <feature-extractor-name> \
+  --suite <training-split-name> \
+  --data-root /path/to/prepared/data \
+  --feature-root /path/to/offline/depth/features \
+  --tokenizer /path/to/tokenizer.model \
+  --vqgan /path/to/visual/tokenizer/checkpoint \
+  --init-params /path/to/base/policy/parameters \
+  --output-dir /path/to/output/root \
+  --experiment-id <anonymous-run-id> \
+  --total-steps 20000 \
+  --batch-size 128 \
+  --mesh-dim '!-1,4,1,1' \
+  --lr 2e-5 \
+  --save-model-freq 20000 \
+  --save-milestone-freq 5000 \
+  --keep-last-milestones 1 \
+  --save-optimizer-state true
 ```
+
+`streaming_params` is the params-only checkpoint used for rollout. `streaming_train_state`
+is the full optimizer state used for exact resume. Milestone files such as
+`streaming_train_state_15000` are controlled by `--save-milestone-freq`; with
+`--keep-last-milestones 1`, only the newest milestone step is kept.
 
 ## Online Rollout Evaluation
 
-Run split online rollout for one suite:
+Run split online rollout for multiple suites:
 
 ```bash
-export SUITE=<evaluation-split-name>
-export STAGE25_MODEL_NAME=<feature-extractor-name>
-export ACTION_FUSION_METHOD=project            # must match training
-export FINETUNED_CHECKPOINT=params::/path/to/fine-tuned/parameters
-export ORIGINAL_LAPA_CHECKPOINT=params::/path/to/base/policy/parameters
-export ACTION_SCALE_FILE=/path/to/evaluation/bin-edges.csv
-export STAGE25_MODEL_CHECKPOINT=/path/to/stage25/checkpoint
-export VQGAN_CHECKPOINT=/path/to/visual/tokenizer/checkpoint
-export VOCAB_FILE=/path/to/tokenizer.model
-export DEPTH_BRANCH_ROOT=/path/to/stage25/source/bundle
-export LIBERO_REPO=/path/to/simulator/repository
-export DEPTH_ESTIMATOR_REQUIRED=true
-export DEPTH_ANYTHING_REPO_DIR=/path/to/depth/estimator/source
-export DEPTH_ANYTHING_CHECKPOINT=/path/to/depth/estimator/checkpoint
-
-export POLICY_CUDA_VISIBLE_DEVICES=0
-export STAGE25_CUDA_VISIBLE_DEVICES=1
-export RGB_CUDA_VISIBLE_DEVICES=2
-export MUJOCO_EGL_DEVICE_ID=1
-
-export TASK_IDS="0 1 2 3 4 5 6 7 8 9"
-export N_EVAL_PER_TASK=10
-export MAX_STEPS=500
-export PROGRESS_FREQ=25
-export OUTPUT_DIR=/path/to/evaluation/output
-export LOG_DIR=/path/to/server/logs
-
-bash scripts/eval_lapa_depth_split_online_rollout.sh
+bash scripts/eval_lapa_depth_split_multi_suite.sh \
+  --model <feature-extractor-name> \
+  --suites "<split-a> <split-b> <split-c>" \
+  --checkpoint-template '/path/to/outputs/128_batch_{model}_{suite}/streaming_params' \
+  --stage25-checkpoint '/path/to/depth/models/{model}.65000.pt' \
+  --action-bin-template '/path/to/data/action_bins_{suite}.csv' \
+  --output-root /path/to/evaluation/output/root \
+  --task-ids "0 1 2 3 4 5 6 7 8 9" \
+  --n-eval-per-task 10 \
+  --max-steps 350 \
+  --policy-gpus 2 \
+  --stage25-gpus 0 \
+  --rgb-gpus 1 \
+  --egl-gpu 0
 ```
 
-Run multiple suites:
+For a single policy checkpoint shared across suites, use:
 
 ```bash
-export SUITES="<split-a> <split-b> <split-c>"
-export SHARED_CHECKPOINT=/path/to/fine-tuned/parameters
-export ACTION_SCALE_FILE_TEMPLATE='/path/to/bin-edges/{suite}.csv'
-export EVAL_OUTPUT_ROOT=/path/to/evaluation/output/root
-export TASK_IDS="0 1 2 3 4 5 6 7 8 9"
-export N_EVAL_PER_TASK=10
-export MAX_STEPS=500
-export OUTPUT_PREFIX="eval_lapa_depth"
-
-bash scripts/eval_lapa_depth_split_multi_suite.sh
+bash scripts/eval_lapa_depth_split_multi_suite.sh \
+  --model <feature-extractor-name> \
+  --suites "<split-a> <split-b> <split-c>" \
+  --shared-checkpoint /path/to/shared/streaming_params \
+  --action-fusion concat
 ```
 ## License
 

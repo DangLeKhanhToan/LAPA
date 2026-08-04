@@ -2,6 +2,7 @@ import pprint
 import os
 import shutil
 import subprocess
+import copy
 
 from tqdm import tqdm, trange
 import numpy as np
@@ -178,6 +179,7 @@ FLAGS, FLAGS_DEF = define_flags_with_default(
     runtime_log_steps=3,
     abort_on_nonfinite=True,
     diagnose_numerics=False,
+    keep_last_milestones=0,
 ) 
 
 
@@ -874,6 +876,12 @@ def main(argv):
         FLAGS.checkpointer, logger.output_dir,
         enable=jax.process_index() == 0,
     )
+    params_checkpointer_config = copy.deepcopy(FLAGS.checkpointer)
+    params_checkpointer_config.save_optimizer_state = False
+    params_checkpointer = StreamingCheckpointer(
+        params_checkpointer_config, logger.output_dir,
+        enable=jax.process_index() == 0,
+    )
 
     sharded_init_fn = pjit(
         init_fn,
@@ -1024,6 +1032,44 @@ def main(argv):
 
         return from_state_dict(target, train_state)
 
+    def _cleanup_old_milestones(current_step):
+        keep = int(FLAGS.keep_last_milestones)
+        if keep <= 0 or jax.process_index() != 0:
+            return
+
+        candidates = []
+        prefixes = ("streaming_params_", "streaming_train_state_", "metadata_", "dataset_")
+        for name in os.listdir(output_dir):
+            for prefix in prefixes:
+                if not name.startswith(prefix):
+                    continue
+                suffix = name[len(prefix):]
+                if suffix.isdigit():
+                    candidates.append((int(suffix), os.path.join(output_dir, name)))
+                break
+
+        protected_steps = sorted({step for step, _ in candidates if step <= current_step}, reverse=True)[:keep]
+        protected_steps = set(protected_steps)
+        removed = []
+        for step, path in candidates:
+            if step in protected_steps:
+                continue
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            elif os.path.exists(path):
+                os.remove(path)
+            removed.append(os.path.basename(path))
+
+        if removed:
+            _runtime_log(
+                "checkpoint_cleanup_old_milestones",
+                {
+                    "current_step": current_step,
+                    "keep_last_milestones": keep,
+                    "removed": removed,
+                },
+            )
+
     def save_checkpoint(train_state, milestone=False):
         step = int(jax.device_get(train_state.step))
         metadata = dict(
@@ -1039,6 +1085,16 @@ def main(argv):
             dataset=dataset.get_state_dict(),
             milestone=milestone,
         )
+        if getattr(FLAGS.checkpointer, "save_optimizer_state", False):
+            params_checkpointer.save_all(
+                train_state=train_state,
+                gather_fns=gather_fns,
+                metadata=metadata,
+                dataset=dataset.get_state_dict(),
+                milestone=milestone,
+            )
+        if milestone:
+            _cleanup_old_milestones(step)
 
     with mesh:
         train_state, restored_params = None, None

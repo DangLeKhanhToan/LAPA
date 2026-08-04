@@ -4,135 +4,219 @@ set -euo pipefail
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PROJECT_DIR="$( cd -- "$( dirname -- "$SCRIPT_DIR" )" &> /dev/null && pwd )"
 cd "$PROJECT_DIR"
-export PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}"
-export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_megacore_fusion_allow_ags=false --xla_enable_async_collective_permute=true --xla_tpu_enable_ag_backward_pipelining=true --xla_tpu_enable_data_parallel_all_reduce_opt=true --xla_tpu_data_parallel_opt_different_sized_ops=true --xla_tpu_enable_async_collective_fusion=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_overlap_compute_collective_tc=true --xla_enable_async_all_gather=true}"
 
-LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
-SUITE="${SUITE:?Set SUITE to the training split or aggregate name}"
-STAGE25_MODEL_NAME="${STAGE25_MODEL_NAME:?Set STAGE25_MODEL_NAME to the configured feature extractor name}"
-TRAIN_JSONL="${TRAIN_JSONL:?Set TRAIN_JSONL to the prepared training JSONL}"
-IMAGE_ROOT="${IMAGE_ROOT:?Set IMAGE_ROOT to the root used by image paths in TRAIN_JSONL}"
-DEPTH_DATA_DIR="${DEPTH_DATA_DIR:?Set DEPTH_DATA_DIR to one directory or a comma-separated directory list}"
-DEPTH_MANIFEST="${DEPTH_MANIFEST:-}"
-ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-}"
-ACTION_FUSION_METHOD="${ACTION_FUSION_METHOD:-project}"
+usage() {
+  cat <<'EOF'
+Usage:
+  bash scripts/train_lapa_depth_suite.sh [options]
+
+Options:
+  --lapa-root PATH              Repository root. Default: script parent directory.
+  --suite NAME                  Training split, e.g. libero_object/libero_goal/all. Default: libero_spatial.
+  --model NAME                  Stage-2.5 model name, e.g. model2/model4/model5. Default: model5.
+  --data-root PATH              LAPA LIBERO JSONL root. Default: <root>/datasets/lapa_libero_v2 if present, else lapa_libero_v1.
+  --feature-root PATH           Offline feature root. Default: <root>/datasets/features_depth_branch.
+  --train-jsonl PATH            Training JSONL. Default: <data-root>/<suite>.jsonl, or <suite>_train.jsonl if present.
+  --image-root PATH             Image root used by JSONL image paths. Default: <data-root>/.
+  --depth-dir PATH              Offline depth-feature directory. Supports comma-separated dirs for concat/all-suite.
+  --depth-manifest PATH         Optional depth manifest path. Supports comma-separated manifests.
+  --action-bins PATH            Action-bin CSV. Default: <data-root>/action_bins_<suite>.csv, else <data-root>/action_bins.csv.
+  --tokenizer PATH              Tokenizer model. Default: <root>/lapa_checkpoints/lapa_7b_sth/tokenizer.model, else tokenizer.model.
+  --vqgan PATH                  VQGAN checkpoint. Default: <root>/lapa_checkpoints/vqgan.
+  --init-params PATH            Initial LAPA params. Default: <root>/lapa_checkpoints/lapa_7b_sth/params.
+  --output-dir PATH             Output root. Default: <root>/outputs.
+  --experiment-id NAME          Run directory. Default: 128_batch_<model>_<suite>.
+  --total-steps N              Total optimization steps. Default: 20000.
+  --batch-size N               Global batch size. Default: 128.
+  --seq-length N               Sequence length. Default: 384.
+  --mesh-dim DIM               JAX mesh_dim. Default: !-1,4,1,1.
+  --lr VALUE                   Learning rate. Default: 2e-5.
+  --action-fusion METHOD       project or concat. Default: project.
+  --save-model-freq N          Save latest params/train-state frequency. Default: total steps.
+  --save-milestone-freq N      Save milestone train-state/params frequency. Default: 0.
+  --keep-last-milestones N     Keep only last N milestone steps; 0 keeps all. Default: 1.
+  --save-optimizer-state BOOL  Save optimizer state for exact resume. Default: true.
+  --autoresume BOOL            Resume from <output>/<experiment>/streaming_train_state. Default: false.
+  --wandb-online BOOL          W&B online mode. Default: false.
+  --help                       Show this help.
+
+The script uses local variables and launches training with env -i, so stale
+suite-specific exports in the parent shell do not override these options.
+EOF
+}
+
+resolve_data_root() {
+  local root="$1"
+  if [[ -d "$root/datasets/lapa_libero_v2" ]]; then
+    printf '%s' "$root/datasets/lapa_libero_v2"
+  elif [[ -d "$root/datasets/lapa_libero_v1" ]]; then
+    printf '%s' "$root/datasets/lapa_libero_v1"
+  else
+    printf '%s' "$root/datasets/lapa_libero_v2"
+  fi
+}
+
+resolve_train_jsonl() {
+  local data_root="$1"
+  local suite="$2"
+  if [[ -f "$data_root/${suite}_train.jsonl" ]]; then
+    printf '%s' "$data_root/${suite}_train.jsonl"
+  else
+    printf '%s' "$data_root/${suite}.jsonl"
+  fi
+}
+
+resolve_action_bins() {
+  local data_root="$1"
+  local suite="$2"
+  if [[ -f "$data_root/action_bins_${suite}.csv" ]]; then
+    printf '%s' "$data_root/action_bins_${suite}.csv"
+  else
+    printf '%s' "$data_root/action_bins.csv"
+  fi
+}
+
+resolve_tokenizer() {
+  local root="$1"
+  if [[ -f "$root/lapa_checkpoints/lapa_7b_sth/tokenizer.model" ]]; then
+    printf '%s' "$root/lapa_checkpoints/lapa_7b_sth/tokenizer.model"
+  else
+    printf '%s' "$root/lapa_checkpoints/tokenizer.model"
+  fi
+}
+
+LAPA_ROOT="$PROJECT_DIR"
+SUITE="libero_spatial"
+STAGE25_MODEL_NAME="model5"
+DATA_ROOT=""
+FEATURE_ROOT=""
+TRAIN_JSONL=""
+IMAGE_ROOT=""
+DEPTH_DATA_DIR=""
+DEPTH_MANIFEST=""
+ACTION_SCALE_FILE=""
+TOKENIZER_PATH=""
+VQGAN_CKPT=""
+LAPA_PARAMS=""
+OUTPUT_DIR=""
+EXPERIMENT_ID=""
+TOTAL_STEPS="20000"
+BATCH_SIZE="128"
+SEQ_LENGTH="384"
+MESH_DIM="!-1,4,1,1"
+LR="2e-5"
+ACTION_FUSION_METHOD="project"
+SAVE_MODEL_FREQ=""
+SAVE_MILESTONE_FREQ="0"
+KEEP_LAST_MILESTONES="1"
+SAVE_OPTIMIZER_STATE="true"
+AUTORESUME="false"
+WANDB_ONLINE="false"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --lapa-root) LAPA_ROOT="$2"; shift 2 ;;
+    --suite) SUITE="$2"; shift 2 ;;
+    --model) STAGE25_MODEL_NAME="$2"; shift 2 ;;
+    --data-root) DATA_ROOT="$2"; shift 2 ;;
+    --feature-root) FEATURE_ROOT="$2"; shift 2 ;;
+    --train-jsonl) TRAIN_JSONL="$2"; shift 2 ;;
+    --image-root) IMAGE_ROOT="$2"; shift 2 ;;
+    --depth-dir) DEPTH_DATA_DIR="$2"; shift 2 ;;
+    --depth-manifest) DEPTH_MANIFEST="$2"; shift 2 ;;
+    --action-bins) ACTION_SCALE_FILE="$2"; shift 2 ;;
+    --tokenizer) TOKENIZER_PATH="$2"; shift 2 ;;
+    --vqgan) VQGAN_CKPT="$2"; shift 2 ;;
+    --init-params) LAPA_PARAMS="$2"; shift 2 ;;
+    --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
+    --experiment-id) EXPERIMENT_ID="$2"; shift 2 ;;
+    --total-steps) TOTAL_STEPS="$2"; shift 2 ;;
+    --batch-size) BATCH_SIZE="$2"; shift 2 ;;
+    --seq-length) SEQ_LENGTH="$2"; shift 2 ;;
+    --mesh-dim) MESH_DIM="$2"; shift 2 ;;
+    --lr) LR="$2"; shift 2 ;;
+    --action-fusion) ACTION_FUSION_METHOD="$2"; shift 2 ;;
+    --save-model-freq) SAVE_MODEL_FREQ="$2"; shift 2 ;;
+    --save-milestone-freq) SAVE_MILESTONE_FREQ="$2"; shift 2 ;;
+    --keep-last-milestones) KEEP_LAST_MILESTONES="$2"; shift 2 ;;
+    --save-optimizer-state) SAVE_OPTIMIZER_STATE="$2"; shift 2 ;;
+    --autoresume) AUTORESUME="$2"; shift 2 ;;
+    --wandb-online) WANDB_ONLINE="$2"; shift 2 ;;
+    --help) usage; exit 0 ;;
+    *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 1 ;;
+  esac
+done
+
+DATA_ROOT="${DATA_ROOT:-$(resolve_data_root "$LAPA_ROOT")}"
+FEATURE_ROOT="${FEATURE_ROOT:-$LAPA_ROOT/datasets/features_depth_branch}"
+TRAIN_JSONL="${TRAIN_JSONL:-$(resolve_train_jsonl "$DATA_ROOT" "$SUITE")}"
+IMAGE_ROOT="${IMAGE_ROOT:-$DATA_ROOT/}"
+DEPTH_DATA_DIR="${DEPTH_DATA_DIR:-$FEATURE_ROOT/stage25_libero_features_${STAGE25_MODEL_NAME}/$SUITE/stage25_${STAGE25_MODEL_NAME}/z_depth_train_shard0}"
+ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$(resolve_action_bins "$DATA_ROOT" "$SUITE")}"
+TOKENIZER_PATH="${TOKENIZER_PATH:-$(resolve_tokenizer "$LAPA_ROOT")}"
+VQGAN_CKPT="${VQGAN_CKPT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
+LAPA_PARAMS="${LAPA_PARAMS:-$LAPA_ROOT/lapa_checkpoints/lapa_7b_sth/params}"
+OUTPUT_DIR="${OUTPUT_DIR:-$LAPA_ROOT/outputs}"
+EXPERIMENT_ID="${EXPERIMENT_ID:-128_batch_${STAGE25_MODEL_NAME}_${SUITE}}"
+SAVE_MODEL_FREQ="${SAVE_MODEL_FREQ:-$TOTAL_STEPS}"
+
 case "$ACTION_FUSION_METHOD" in
   project|concat) ;;
-  *) echo "ERROR: ACTION_FUSION_METHOD must be project or concat" >&2; exit 1 ;;
+  *) echo "ERROR: --action-fusion must be project or concat" >&2; exit 1 ;;
+esac
+case "$SAVE_OPTIMIZER_STATE" in
+  true|false|True|False) ;;
+  *) echo "ERROR: --save-optimizer-state must be true or false" >&2; exit 1 ;;
+esac
+case "$AUTORESUME" in
+  true|false|True|False) ;;
+  *) echo "ERROR: --autoresume must be true or false" >&2; exit 1 ;;
 esac
 
-if [[ ! -f "$TRAIN_JSONL" ]]; then
-  echo "ERROR: train JSONL not found: $TRAIN_JSONL" >&2
-  exit 1
-fi
-if [[ -n "$ACTION_SCALE_FILE" && ! -f "$ACTION_SCALE_FILE" ]]; then
-  echo "ERROR: action bins CSV not found: $ACTION_SCALE_FILE" >&2
-  exit 1
-fi
-if [[ -z "${ACTION_VOCAB_SIZE:-}" ]]; then
-  [[ -n "$ACTION_SCALE_FILE" ]] || {
-    echo "ERROR: set ACTION_VOCAB_SIZE directly, or provide ACTION_SCALE_FILE" >&2
-    exit 1
-  }
-  ACTION_VOCAB_SIZE="$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')"
-fi
+[[ -f "$TRAIN_JSONL" ]] || { echo "ERROR: train JSONL not found: $TRAIN_JSONL" >&2; exit 1; }
+[[ -f "$ACTION_SCALE_FILE" ]] || { echo "ERROR: action bins CSV not found: $ACTION_SCALE_FILE" >&2; exit 1; }
+[[ -f "$TOKENIZER_PATH" ]] || { echo "ERROR: tokenizer not found: $TOKENIZER_PATH" >&2; exit 1; }
+[[ -e "$VQGAN_CKPT" ]] || { echo "ERROR: VQGAN checkpoint not found: $VQGAN_CKPT" >&2; exit 1; }
+[[ -e "$LAPA_PARAMS" ]] || { echo "ERROR: initial LAPA params not found: $LAPA_PARAMS" >&2; exit 1; }
 
-# Validate every action token before allocating the 7B model on GPU.  This also
-# identifies legacy LIBERO JSONL files whose gripper token is {-1,+1}; the data
-# loader safely normalizes that final -1 token to bin 0.
-ACTION_TOKEN_SCAN="$(
-  python3 - "$TRAIN_JSONL" "$ACTION_VOCAB_SIZE" <<'PY'
-import json
-import sys
+ACTION_VOCAB_SIZE="$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')"
+WANDB_DIR="$OUTPUT_DIR/$EXPERIMENT_ID/wandb"
 
-path, vocab_text = sys.argv[1:3]
-vocab = int(vocab_text)
-mins = [None] * 7
-maxs = [None] * 7
-legacy_gripper_minus_one = 0
-records = 0
+echo "[train-depth] root: $LAPA_ROOT"
+echo "[train-depth] suite: $SUITE"
+echo "[train-depth] model: $STAGE25_MODEL_NAME"
+echo "[train-depth] fusion: $ACTION_FUSION_METHOD"
+echo "[train-depth] train jsonl: $TRAIN_JSONL"
+echo "[train-depth] image root: $IMAGE_ROOT"
+echo "[train-depth] depth dir: $DEPTH_DATA_DIR"
+echo "[train-depth] depth manifest: ${DEPTH_MANIFEST:-<none>}"
+echo "[train-depth] action bins: $ACTION_SCALE_FILE"
+echo "[train-depth] action vocab size: $ACTION_VOCAB_SIZE"
+echo "[train-depth] init params: $LAPA_PARAMS"
+echo "[train-depth] output: $OUTPUT_DIR/$EXPERIMENT_ID"
+echo "[train-depth] total steps: $TOTAL_STEPS | batch size: $BATCH_SIZE | lr: $LR"
+echo "[train-depth] save model freq: $SAVE_MODEL_FREQ"
+echo "[train-depth] save milestone freq: $SAVE_MILESTONE_FREQ | keep last milestones: $KEEP_LAST_MILESTONES"
+echo "[train-depth] save optimizer state: $SAVE_OPTIMIZER_STATE | autoresume: $AUTORESUME"
 
-with open(path, "r", encoding="utf-8") as stream:
-    for line_number, line in enumerate(stream, 1):
-        if not line.strip():
-            continue
-        record = json.loads(line)
-        tokens = [int(value) for value in record["action"]]
-        if len(tokens) != 7:
-            raise SystemExit(
-                f"ERROR: {path}:{line_number}: expected 7 action tokens, "
-                f"found {len(tokens)}"
-            )
-        if tokens[-1] == -1:
-            legacy_gripper_minus_one += 1
-            tokens[-1] = 0
-        invalid = [value for value in tokens if value < 0 or value >= vocab]
-        if invalid:
-            raise SystemExit(
-                f"ERROR: {path}:{line_number}: action={tokens} contains "
-                f"tokens outside [0, {vocab - 1}]. The JSONL and action-bin "
-                "CSV were not generated as a matching pair."
-            )
-        for dim, value in enumerate(tokens):
-            mins[dim] = value if mins[dim] is None else min(mins[dim], value)
-            maxs[dim] = value if maxs[dim] is None else max(maxs[dim], value)
-        records += 1
-
-if records == 0:
-    raise SystemExit(f"ERROR: no records found in {path}")
-
-print(
-    f"records={records} min={mins} max={maxs} "
-    f"legacy_gripper_-1={legacy_gripper_minus_one}"
-)
-PY
-)"
-TOKENIZER_PATH="${TOKENIZER_PATH:?Set TOKENIZER_PATH to the tokenizer model}"
-VQGAN_CKPT="${VQGAN_CKPT:?Set VQGAN_CKPT to the visual tokenizer checkpoint}"
-LAPA_PARAMS="${LAPA_PARAMS:?Set LAPA_PARAMS to the initialization parameter directory}"
-OUTPUT_DIR="${OUTPUT_DIR:?Set OUTPUT_DIR to a writable experiment-output directory}"
-PROJECT_ID="${PROJECT_ID:-depth_policy}"
-EXPERIMENT_ID="${EXPERIMENT_ID:?Set EXPERIMENT_ID to an anonymous run identifier}"
-EXPERIMENT_NOTE="${EXPERIMENT_NOTE:-depth-aware policy fine-tuning}"
-TOTAL_STEPS="${TOTAL_STEPS:-20000}"
-BATCH_SIZE="${BATCH_SIZE:-128}"
-SEQ_LENGTH="${SEQ_LENGTH:-384}"
-MESH_DIM="${MESH_DIM:-!-1,4,1,1}"
-LR="${LR:-2e-5}"
-DEPTH_ID_KEY="${DEPTH_ID_KEY:-auto}"
-DEPTH_FEATURE_KEY="${DEPTH_FEATURE_KEY:-auto}"
-DEPTH_FEATURE_DIM="${DEPTH_FEATURE_DIM:-1024}"
-JSON_ID_KEY="${JSON_ID_KEY:-id}"
-JSON_ID_SOURCE="${JSON_ID_SOURCE:-auto}"
-WANDB_ONLINE="${WANDB_ONLINE:-False}"
-WANDB_DIR="${WANDB_DIR:-$OUTPUT_DIR/$EXPERIMENT_ID/wandb}"
-LOG_FREQ="${LOG_FREQ:-1}"
-EVAL_STEPS="${EVAL_STEPS:-0}"
-EVAL_LOG_FREQ="${EVAL_LOG_FREQ:-100}"
-SAVE_MODEL_FREQ="${SAVE_MODEL_FREQ:-$TOTAL_STEPS}"
-SAVE_MILESTONE_FREQ="${SAVE_MILESTONE_FREQ:-0}"
-RUNTIME_LOG_STEPS="${RUNTIME_LOG_STEPS:-${runtime_log_steps:-3}}"
-DIAGNOSE_NUMERICS="${DIAGNOSE_NUMERICS:-False}"
-AUTORESUME="${AUTORESUME:-False}"
-SAVE_OPTIMIZER_STATE="${SAVE_OPTIMIZER_STATE:-False}"
-
-args=(
+python_args=(
   -u -m latent_pretraining.train
   --modality="vision,action,delta"
   --mesh_dim="$MESH_DIM"
   --dtype="bf16"
   --total_steps="$TOTAL_STEPS"
-  --log_freq="$LOG_FREQ"
-  --eval_steps="$EVAL_STEPS"
+  --log_freq="${LOG_FREQ:-1}"
+  --eval_steps="${EVAL_STEPS:-0}"
   --save_model_freq="$SAVE_MODEL_FREQ"
-  --eval_log_freq="$EVAL_LOG_FREQ"
+  --eval_log_freq="${EVAL_LOG_FREQ:-100}"
   --save_milestone_freq="$SAVE_MILESTONE_FREQ"
-  --runtime_log_steps="$RUNTIME_LOG_STEPS"
+  --keep_last_milestones="$KEEP_LAST_MILESTONES"
+  --runtime_log_steps="${RUNTIME_LOG_STEPS:-3}"
   --abort_on_nonfinite=True
-  --diagnose_numerics="$DIAGNOSE_NUMERICS"
+  --diagnose_numerics="${DIAGNOSE_NUMERICS:-False}"
   --load_llama_config="7b"
   --load_checkpoint="params::$LAPA_PARAMS"
-  --update_llama_config="dict(action_vocab_size=${ACTION_VOCAB_SIZE},depth_feature_dim=${DEPTH_FEATURE_DIM},action_fusion_method='${ACTION_FUSION_METHOD}',delta_vocab_size=8,theta=50000000,max_sequence_length=2048,use_flash_attention=True,scan_attention=True,scan_query_chunk_size=512,scan_key_chunk_size=1024,remat_attention='nothing_saveable',scan_mlp=True,scan_mlp_chunk_size=8192,remat_mlp='nothing_saveable',remat_block='nothing_saveable',scan_layers=True)"
+  --update_llama_config="dict(action_vocab_size=${ACTION_VOCAB_SIZE},depth_feature_dim=1024,action_fusion_method='${ACTION_FUSION_METHOD}',delta_vocab_size=8,theta=50000000,max_sequence_length=2048,use_flash_attention=True,scan_attention=True,scan_query_chunk_size=512,scan_key_chunk_size=1024,remat_attention='nothing_saveable',scan_mlp=True,scan_mlp_chunk_size=8192,remat_mlp='nothing_saveable',remat_block='nothing_saveable',scan_layers=True)"
   --tokenizer.vocab_file="$TOKENIZER_PATH"
   --optimizer.type="adamw"
   --llama.action_vocab_size="$ACTION_VOCAB_SIZE"
@@ -147,8 +231,8 @@ args=(
   --use_data_sharded_loader=True
   --train_dataset.type="json_vision_delta_action"
   --train_dataset.delta_vision_action_processor.fields_from_example="fields"
-  --train_dataset.delta_vision_action_processor.sample_id_key="$JSON_ID_KEY"
-  --train_dataset.delta_vision_action_processor.sample_id_source="$JSON_ID_SOURCE"
+  --train_dataset.delta_vision_action_processor.sample_id_key="${JSON_ID_KEY:-id}"
+  --train_dataset.delta_vision_action_processor.sample_id_source="${JSON_ID_SOURCE:-auto}"
   --train_dataset.delta_vision_action_processor.n_tokens_per_action=7
   --train_dataset.delta_vision_action_processor.n_tokens_per_delta=4
   --train_dataset.delta_vision_action_processor.img_aug=True
@@ -159,51 +243,43 @@ args=(
   --train_dataset.json_delta_action_dataset.path="$TRAIN_JSONL"
   --train_dataset.json_delta_action_dataset.seq_length="$SEQ_LENGTH"
   --train_dataset.json_delta_action_dataset.batch_size="$BATCH_SIZE"
-  --train_dataset.json_delta_action_dataset.tokenizer_processes=1
-  --train_dataset.json_delta_action_dataset.tokenizer_parallel_chunk_size=128
-  --train_dataset.json_delta_action_dataset.tokenizer_parallel_batch_size=128
+  --train_dataset.json_delta_action_dataset.tokenizer_processes="${TOKENIZER_PROCESSES:-1}"
+  --train_dataset.json_delta_action_dataset.tokenizer_parallel_chunk_size="${TOKENIZER_PARALLEL_CHUNK_SIZE:-128}"
+  --train_dataset.json_delta_action_dataset.tokenizer_parallel_batch_size="${TOKENIZER_PARALLEL_BATCH_SIZE:-128}"
   --train_dataset.json_delta_action_dataset.use_data_sharded_loader=True
   --train_dataset.json_delta_action_dataset.depth_feature_data_dir="$DEPTH_DATA_DIR"
-  --train_dataset.json_delta_action_dataset.depth_feature_key="$DEPTH_FEATURE_KEY"
-  --train_dataset.json_delta_action_dataset.depth_feature_id_key="$DEPTH_ID_KEY"
-  --train_dataset.json_delta_action_dataset.depth_feature_dim="$DEPTH_FEATURE_DIM"
+  --train_dataset.json_delta_action_dataset.depth_feature_key="${DEPTH_FEATURE_KEY:-auto}"
+  --train_dataset.json_delta_action_dataset.depth_feature_id_key="${DEPTH_ID_KEY:-auto}"
+  --train_dataset.json_delta_action_dataset.depth_feature_dim=1024
   --checkpointer.save_optimizer_state="$SAVE_OPTIMIZER_STATE"
   --autoresume="$AUTORESUME"
   --logger.append_uuid=False
   --logger.online="$WANDB_ONLINE"
-  --logger.project_id="$PROJECT_ID"
+  --logger.project_id="${PROJECT_ID:-depth_policy}"
   --logger.experiment_id="$EXPERIMENT_ID"
-  --logger.experiment_note="$EXPERIMENT_NOTE"
+  --logger.experiment_note="${EXPERIMENT_NOTE:-depth-aware policy fine-tuning}"
   --logger.output_dir="$OUTPUT_DIR"
   --logger.wandb_dir="$WANDB_DIR"
 )
 
 if [[ -n "$DEPTH_MANIFEST" ]]; then
-  args+=(--train_dataset.json_delta_action_dataset.depth_feature_manifest="$DEPTH_MANIFEST")
+  python_args+=(--train_dataset.json_delta_action_dataset.depth_feature_manifest="$DEPTH_MANIFEST")
 fi
 
-echo "[train-depth-suite] suite: $SUITE"
-echo "[train-depth-suite] stage25 model: $STAGE25_MODEL_NAME"
-echo "[train-depth-suite] action fusion: $ACTION_FUSION_METHOD"
-echo "[train-depth-suite] train jsonl: $TRAIN_JSONL"
-echo "[train-depth-suite] image root: $IMAGE_ROOT"
-echo "[train-depth-suite] action bins: $ACTION_SCALE_FILE"
-echo "[train-depth-suite] action_vocab_size: $ACTION_VOCAB_SIZE"
-echo "[train-depth-suite] action token scan: $ACTION_TOKEN_SCAN"
-echo "[train-depth-suite] depth dir: $DEPTH_DATA_DIR"
-echo "[train-depth-suite] depth manifest: ${DEPTH_MANIFEST:-<none>}"
-echo "[train-depth-suite] output: $OUTPUT_DIR/$EXPERIMENT_ID"
-echo "[train-depth-suite] mesh: $MESH_DIM"
-echo "[train-depth-suite] total_steps: $TOTAL_STEPS"
-echo "[train-depth-suite] batch_size: $BATCH_SIZE"
-echo "[train-depth-suite] tokenizer_processes: 1"
-echo "[train-depth-suite] log_freq: $LOG_FREQ"
-echo "[train-depth-suite] save_model_freq: $SAVE_MODEL_FREQ"
-echo "[train-depth-suite] save_milestone_freq: $SAVE_MILESTONE_FREQ"
-echo "[train-depth-suite] autoresume: $AUTORESUME"
-echo "[train-depth-suite] save_optimizer_state: $SAVE_OPTIMIZER_STATE"
-echo "[train-depth-suite] diagnose_numerics: $DIAGNOSE_NUMERICS"
+env -i \
+  HOME="$HOME" \
+  USER="${USER:-}" \
+  PATH="$PATH" \
+  LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
+  CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-}" \
+  PYTHONPATH="$LAPA_ROOT:${PYTHONPATH:-}" \
+  XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}" \
+  XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.80}" \
+  TF_FORCE_GPU_ALLOW_GROWTH="${TF_FORCE_GPU_ALLOW_GROWTH:-true}" \
+  JAX_PLATFORMS="${JAX_PLATFORMS:-cuda,cpu}" \
+  WANDB_MODE="${WANDB_MODE:-offline}" \
+  LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_megacore_fusion_allow_ags=false --xla_enable_async_collective_permute=true --xla_tpu_enable_ag_backward_pipelining=true --xla_tpu_enable_data_parallel_all_reduce_opt=true --xla_tpu_data_parallel_opt_different_sized_ops=true --xla_tpu_enable_async_collective_fusion=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_overlap_compute_collective_tc=true --xla_enable_async_all_gather=true}" \
+  python3 "${python_args[@]}"
 
-python3 "${args[@]}"
-
-echo "[train-depth-suite] checkpoint: $OUTPUT_DIR/$EXPERIMENT_ID/streaming_params"
+echo "[train-depth] params: $OUTPUT_DIR/$EXPERIMENT_ID/streaming_params"
+echo "[train-depth] train state: $OUTPUT_DIR/$EXPERIMENT_ID/streaming_train_state"
