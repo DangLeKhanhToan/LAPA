@@ -52,8 +52,6 @@ N_EVAL_PER_TASK="${N_EVAL_PER_TASK:-1}"
 MAX_STEPS="${MAX_STEPS:-80}"
 INIT_OFFSET="${INIT_OFFSET:-0}"
 PROGRESS_FREQ="${PROGRESS_FREQ:-25}"
-ACTION_VOCAB_SIZE="${ACTION_VOCAB_SIZE:-$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')}"
-UPDATE_LLAMA_CONFIG="${UPDATE_LLAMA_CONFIG:-dict(action_vocab_size=${ACTION_VOCAB_SIZE},depth_feature_dim=1024,action_fusion_method='${ACTION_FUSION_METHOD}',delta_vocab_size=8,sample_mode='text',theta=50000000,max_sequence_length=32768,scan_attention=False,scan_query_chunk_size=128,scan_key_chunk_size=128,scan_mlp=False,scan_mlp_chunk_size=8192,scan_layers=True)}"
 
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.80}"
@@ -63,6 +61,16 @@ export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda,cpu}"
 [[ -d "$DEPTH_BRANCH_ROOT" ]] || { echo "ERROR: DEPTH_BRANCH_ROOT not found: $DEPTH_BRANCH_ROOT" >&2; exit 1; }
 [[ -f "$STAGE25_MODEL_CHECKPOINT" ]] || { echo "ERROR: STAGE25_MODEL_CHECKPOINT not found: $STAGE25_MODEL_CHECKPOINT" >&2; exit 1; }
 [[ -f "$ACTION_SCALE_FILE" ]] || { echo "ERROR: ACTION_SCALE_FILE not found: $ACTION_SCALE_FILE" >&2; exit 1; }
+if [[ -z "${ACTION_VOCAB_SIZE:-}" ]]; then
+  ACTION_VOCAB_SIZE="$(awk -F, 'NR == 1 { print NF; exit }' "$ACTION_SCALE_FILE")"
+fi
+if [[ -z "$ACTION_VOCAB_SIZE" || "$ACTION_VOCAB_SIZE" == "0" ]]; then
+  echo "ERROR: could not infer ACTION_VOCAB_SIZE from $ACTION_SCALE_FILE" >&2
+  exit 1
+fi
+if [[ -z "${UPDATE_LLAMA_CONFIG:-}" ]]; then
+  UPDATE_LLAMA_CONFIG="dict(action_vocab_size=${ACTION_VOCAB_SIZE},depth_feature_dim=1024,action_fusion_method='${ACTION_FUSION_METHOD}',delta_vocab_size=8,sample_mode='text',theta=50000000,max_sequence_length=32768,scan_attention=False,scan_query_chunk_size=128,scan_key_chunk_size=128,scan_mlp=False,scan_mlp_chunk_size=8192,scan_layers=True)"
+fi
 if [[ "$DEPTH_ESTIMATOR_REQUIRED" == "true" ]]; then
   [[ -n "$DEPTH_ANYTHING_REPO_DIR" ]] || { echo "ERROR: set DEPTH_ANYTHING_REPO_DIR" >&2; exit 1; }
   [[ -n "$DEPTH_ANYTHING_CHECKPOINT" ]] || { echo "ERROR: set DEPTH_ANYTHING_CHECKPOINT" >&2; exit 1; }

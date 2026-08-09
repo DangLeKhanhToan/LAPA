@@ -140,12 +140,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-DATA_ROOT="${DATA_ROOT:-$(resolve_data_root "$LAPA_ROOT")}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-$LAPA_ROOT/rollouts}"
-OUTPUT_PREFIX="${OUTPUT_PREFIX:-eval_split_${STAGE25_MODEL_NAME}}"
-CHECKPOINT_TEMPLATE="${CHECKPOINT_TEMPLATE:-$LAPA_ROOT/outputs/128_batch_{model}_{suite}/streaming_params}"
-ACTION_BIN_TEMPLATE="${ACTION_BIN_TEMPLATE:-$(default_action_template "$DATA_ROOT")}"
-STAGE25_CHECKPOINT_TEMPLATE="${STAGE25_CHECKPOINT_TEMPLATE:-$LAPA_ROOT/lapa_checkpoints/depth_model/{model}.65000.pt}"
+if [[ -z "$DATA_ROOT" ]]; then
+  DATA_ROOT="$(resolve_data_root "$LAPA_ROOT")"
+fi
+if [[ -z "$OUTPUT_ROOT" ]]; then
+  OUTPUT_ROOT="$LAPA_ROOT/rollouts"
+fi
+if [[ -z "$OUTPUT_PREFIX" ]]; then
+  OUTPUT_PREFIX="eval_split_${STAGE25_MODEL_NAME}"
+fi
+if [[ -z "$CHECKPOINT_TEMPLATE" ]]; then
+  CHECKPOINT_TEMPLATE="$LAPA_ROOT/outputs/128_batch_{model}_{suite}/streaming_params"
+fi
+if [[ -z "$ACTION_BIN_TEMPLATE" ]]; then
+  ACTION_BIN_TEMPLATE="$(default_action_template "$DATA_ROOT")"
+fi
+if [[ -z "$STAGE25_CHECKPOINT_TEMPLATE" ]]; then
+  STAGE25_CHECKPOINT_TEMPLATE="$LAPA_ROOT/lapa_checkpoints/depth_model/{model}.65000.pt"
+fi
 if [[ -z "$DEPTH_ESTIMATOR_REQUIRED" ]]; then
   if [[ "$STAGE25_MODEL_NAME" == "model5" ]]; then
     DEPTH_ESTIMATOR_REQUIRED="false"
@@ -275,6 +287,7 @@ for suite in $SUITES; do
     SUITE="$suite" \
     FINETUNED_CHECKPOINT="$checkpoint" \
     ACTION_SCALE_FILE="$action_scale_file" \
+    ACTION_VOCAB_SIZE="" \
     ACTION_FUSION_METHOD="$ACTION_FUSION_METHOD" \
     TASK_IDS="$TASK_IDS" \
     N_EVAL_PER_TASK="$N_EVAL_PER_TASK" \
