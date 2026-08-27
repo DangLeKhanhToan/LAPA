@@ -294,6 +294,9 @@ for suite in $SUITES; do
     N_EVAL_PER_TASK="$N_EVAL_PER_TASK" \
     MAX_STEPS="$MAX_STEPS" \
     PROGRESS_FREQ="$PROGRESS_FREQ" \
+    TRACK_DIAGNOSTICS="${TRACK_DIAGNOSTICS:-false}" \
+    REFERENCE_SUITE="${REFERENCE_SUITE:-auto}" \
+    APPROACH_THRESHOLD="${APPROACH_THRESHOLD:-0.10}" \
     OUTPUT_DIR="$suite_output" \
     LOG_DIR="$suite_log_dir" \
     bash "$SCRIPT_DIR/eval_lapa_depth_split_online_rollout.sh"

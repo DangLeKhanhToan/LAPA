@@ -15,6 +15,13 @@ import numpy as np
 import requests
 from PIL import Image
 
+from eval.libero_diagnostics import (
+    EpisodeDiagnostics,
+    aggregate_episode_summaries,
+    object_positions,
+    save_episode_diagnostics,
+)
+
 try:
     import imageio.v2 as imageio
 except Exception:
@@ -95,7 +102,34 @@ def make_env(bddl_folder, task, img_size):
     return env
 
 
-def rollout_episode(env, init_state, task, args, tmp_path, task_id, ep):
+def collect_reference_positions(
+    benchmark_dict, bddl_folder, suite_name, task_id, episode_indices, img_size
+):
+    if not suite_name or suite_name not in benchmark_dict:
+        return [None] * len(episode_indices)
+    reference_benchmark = benchmark_dict[suite_name]()
+    if task_id >= reference_benchmark.n_tasks:
+        return [None] * len(episode_indices)
+    task = reference_benchmark.get_task(task_id)
+    states = np.asarray(reference_benchmark.get_task_init_states(task_id))
+    env = make_env(bddl_folder, task, img_size)
+    references = []
+    try:
+        for index in episode_indices:
+            env.reset()
+            obs = env.set_init_state(states[index % states.shape[0]][None])
+            for _ in range(5):
+                obs, _, _, _ = env.step(np.zeros((1, 7)))
+            references.append(object_positions(env))
+    finally:
+        env.close()
+    return references
+
+
+def rollout_episode(
+    env, init_state, task, args, tmp_path, task_id, ep, init_index,
+    reference_suite=None, reference_positions=None,
+):
     env.reset()
     obs = env.set_init_state(init_state[None])
     for _ in range(5):
@@ -103,6 +137,20 @@ def rollout_episode(env, init_state, task, args, tmp_path, task_id, ep):
 
     frames = []
     success = False
+    diagnostics = None
+    if args.track_diagnostics:
+        diagnostics = EpisodeDiagnostics(
+            env,
+            suite=args._suite,
+            task_id=task_id,
+            episode=ep,
+            init_index=init_index,
+            instruction=task.language,
+            reference_suite=reference_suite,
+            reference_positions=reference_positions,
+            approach_threshold=args.approach_threshold,
+        )
+        diagnostics.observe(0, obs[0])
     max_steps = args.max_steps if args.max_steps > 0 else DEFAULT_MAX_STEPS.get(args._suite, 520)
     episode_start = time.time()
     print(
@@ -130,6 +178,9 @@ def rollout_episode(env, init_state, task, args, tmp_path, task_id, ep):
         frames.append(raw_img if getattr(args, 'rot180_for_model', False) else raw_img[::-1, ::-1])
         action = query_action(args, image_model, task.language, tmp_path)
         obs, _, done, _ = env.step(action[None])
+        step_success = bool(done[0])
+        if diagnostics is not None:
+            diagnostics.observe(step_index + 1, obs[0], action=action, success=step_success)
         if args.progress_freq > 0 and (
             (step_index + 1) % args.progress_freq == 0 or step_index == 0
         ):
@@ -143,10 +194,11 @@ def rollout_episode(env, init_state, task, args, tmp_path, task_id, ep):
                 f"sec_step={sec_per_step:.2f}",
                 flush=True,
             )
-        if bool(done[0]):
+        if step_success:
             success = True
             break
-    return success, frames
+    diagnostic_payload = diagnostics.finalize(success) if diagnostics is not None else None
+    return success, frames, diagnostic_payload
 
 
 def save_video(frames, path, fps):
@@ -192,6 +244,7 @@ def main():
     results = {}
     total_success = 0
     total_episodes = 0
+    all_diagnostic_episodes = []
     for suite in args.suites:
         if suite not in benchmark_dict:
             print(f"[warn] unknown suite {suite}, skipping")
@@ -204,17 +257,48 @@ def main():
             task_ids = task_ids[: args.max_tasks]
         suite_success = 0
         suite_episodes = 0
+        suite_diagnostic_episodes = []
         results[suite] = {"tasks": {}}
         for task_id in task_ids:
             task = bench.get_task(task_id)
             init_states = np.asarray(bench.get_task_init_states(task_id))
             task_name = sanitize(task.bddl_file.replace(".bddl", ""))
             env = make_env(bddl_folder, task, args.img_size)
+            episode_indices = [
+                (offset + ep) % init_states.shape[0] for ep in range(args.n_eval_per_task)
+            ]
+            reference_suite = args.reference_suite
+            if reference_suite == "auto":
+                reference_suite = suite[:-5] if suite.endswith("_swap") else None
+            reference_positions = (
+                collect_reference_positions(
+                    benchmark_dict,
+                    bddl_folder,
+                    reference_suite,
+                    task_id,
+                    episode_indices,
+                    args.img_size,
+                )
+                if args.track_diagnostics and reference_suite
+                else [None] * args.n_eval_per_task
+            )
             task_success = 0
+            task_diagnostic_episodes = []
             for ep in range(args.n_eval_per_task):
                 idx = (offset + ep) % init_states.shape[0]
                 ep_start = time.time()
-                success, frames = rollout_episode(env, init_states[idx], task, args, tmp_path, task_id, ep)
+                success, frames, diagnostic_payload = rollout_episode(
+                    env,
+                    init_states[idx],
+                    task,
+                    args,
+                    tmp_path,
+                    task_id,
+                    ep,
+                    idx,
+                    reference_suite=reference_suite,
+                    reference_positions=reference_positions[ep],
+                )
                 task_success += int(success)
                 tag = "success" if success else "fail"
                 if success or args.save_failures:
@@ -223,6 +307,22 @@ def main():
                         os.path.join(args.output_dir, suite, task_name, f"ep{ep}_{tag}.mp4"),
                         args.fps,
                     )
+                if diagnostic_payload is not None:
+                    diagnostic_path = os.path.join(
+                        args.output_dir,
+                        "diagnostics",
+                        suite,
+                        task_name,
+                        f"ep{ep}.json.gz",
+                    )
+                    save_episode_diagnostics(diagnostic_payload, diagnostic_path)
+                    compact = {
+                        "meta": diagnostic_payload["meta"],
+                        "summary": diagnostic_payload["summary"],
+                    }
+                    task_diagnostic_episodes.append(compact)
+                    suite_diagnostic_episodes.append(compact)
+                    all_diagnostic_episodes.append(compact)
                 print(
                     f"[{suite}] task {task_id} ({task.language!r}) ep {ep}: {tag} | "
                     f"episode_time={(time.time() - ep_start)/60:.1f}m",
@@ -231,14 +331,26 @@ def main():
             env.close()
             rate = task_success / args.n_eval_per_task
             results[suite]["tasks"][task_name] = {"success_rate": rate, "n_eval": args.n_eval_per_task}
+            if task_diagnostic_episodes:
+                results[suite]["tasks"][task_name]["diagnostics"] = (
+                    aggregate_episode_summaries(task_diagnostic_episodes)
+                )
             suite_success += task_success
             suite_episodes += args.n_eval_per_task
         results[suite]["success_rate"] = suite_success / max(suite_episodes, 1)
         results[suite]["n_eval"] = suite_episodes
+        if suite_diagnostic_episodes:
+            results[suite]["diagnostics"] = aggregate_episode_summaries(
+                suite_diagnostic_episodes
+            )
         total_success += suite_success
         total_episodes += suite_episodes
 
     results["overall"] = {"success_rate": total_success / max(total_episodes, 1), "n_eval": total_episodes}
+    if all_diagnostic_episodes:
+        results["overall"]["diagnostics"] = aggregate_episode_summaries(
+            all_diagnostic_episodes
+        )
     with open(os.path.join(args.output_dir, "results.json"), "w") as fout:
         json.dump(results, fout, indent=2)
     print(json.dumps(results["overall"], indent=2))
@@ -267,6 +379,9 @@ def parse_args():
     parser.add_argument("--connect_retries", type=int, default=60)
     parser.add_argument("--retry_wait", type=float, default=10.0)
     parser.add_argument("--progress_freq", type=int, default=25)
+    parser.add_argument("--track_diagnostics", action="store_true", default=False)
+    parser.add_argument("--reference_suite", type=str, default="auto")
+    parser.add_argument("--approach_threshold", type=float, default=0.10)
     return parser.parse_args()
 
 

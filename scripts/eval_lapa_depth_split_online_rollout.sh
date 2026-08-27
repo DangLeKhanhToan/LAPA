@@ -52,6 +52,9 @@ N_EVAL_PER_TASK="${N_EVAL_PER_TASK:-1}"
 MAX_STEPS="${MAX_STEPS:-80}"
 INIT_OFFSET="${INIT_OFFSET:-0}"
 PROGRESS_FREQ="${PROGRESS_FREQ:-25}"
+TRACK_DIAGNOSTICS="${TRACK_DIAGNOSTICS:-false}"
+REFERENCE_SUITE="${REFERENCE_SUITE:-auto}"
+APPROACH_THRESHOLD="${APPROACH_THRESHOLD:-0.10}"
 
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.80}"
@@ -185,6 +188,15 @@ wait_for_log "rgb_feature" "$RGB_LOG" "$RGB_PID"
 wait_for_log "stage25" "$STAGE25_LOG" "$STAGE25_PID"
 wait_for_log "policy" "$POLICY_LOG" "$POLICY_PID"
 
+diagnostic_args=()
+if [[ "$TRACK_DIAGNOSTICS" == "true" ]]; then
+  diagnostic_args+=(
+    --track_diagnostics
+    --reference_suite "$REFERENCE_SUITE"
+    --approach_threshold "$APPROACH_THRESHOLD"
+  )
+fi
+
 MUJOCO_GL="${MUJOCO_GL:-egl}" PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}" \
 MUJOCO_EGL_DEVICE_ID="$MUJOCO_EGL_DEVICE_ID" PYTHONPATH="$LIBERO_REPO:$PROJECT_DIR:${PYTHONPATH:-}" \
 "$LIBERO_PY" "$PROJECT_DIR/eval/eval_libero_rollout_depth.py" \
@@ -195,6 +207,7 @@ MUJOCO_EGL_DEVICE_ID="$MUJOCO_EGL_DEVICE_ID" PYTHONPATH="$LIBERO_REPO:$PROJECT_D
   --n_eval_per_task "$N_EVAL_PER_TASK" \
   --max_steps "$MAX_STEPS" \
   --init_offset "$INIT_OFFSET" \
-  --progress_freq "$PROGRESS_FREQ"
+  --progress_freq "$PROGRESS_FREQ" \
+  "${diagnostic_args[@]}"
 
 echo "[split-rollout] wrote results/videos to $OUTPUT_DIR"

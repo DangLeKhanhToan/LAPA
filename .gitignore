@@ -12,6 +12,8 @@ logs/
 *.ckpt
 *.tar
 *.zip
+*.png
+*.jpg
 
 # Machine- and scheduler-specific launch configuration
 *.pbs
