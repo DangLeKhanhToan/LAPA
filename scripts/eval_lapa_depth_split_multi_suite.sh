@@ -258,6 +258,7 @@ for suite in $SUITES; do
     PATH="$PATH" \
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
     PYTHONPATH="$LAPA_ROOT:${PYTHONPATH:-}" \
+    LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-}" \
     MODEL_PY="${MODEL_PY:-python}" \
     LIBERO_PY="${LIBERO_PY:-${MODEL_PY:-python}}" \
     LAPA_ROOT="$LAPA_ROOT" \

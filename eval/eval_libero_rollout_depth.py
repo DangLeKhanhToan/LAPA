@@ -167,12 +167,17 @@ def main():
     from libero.libero import benchmark, get_libero_path
     from libero.libero.envs import DummyVectorEnv, OffScreenRenderEnv
 
+    import inspect
     import torch
 
     original_torch_load = torch.load
+    supports_weights_only = "weights_only" in inspect.signature(original_torch_load).parameters
 
     def torch_load_compat(*call_args, **call_kwargs):
-        call_kwargs.setdefault("weights_only", False)
+        if supports_weights_only:
+            call_kwargs.setdefault("weights_only", False)
+        else:
+            call_kwargs.pop("weights_only", None)
         return original_torch_load(*call_args, **call_kwargs)
 
     torch.load = torch_load_compat

@@ -183,11 +183,16 @@ def main():
 
     # torch>=2.6 flipped torch.load default to weights_only=True, which rejects the
     # numpy-pickled LIBERO init-state files. Restore the old behavior for LIBERO's loads.
+    import inspect
     import torch
     _orig_torch_load = torch.load
+    _supports_weights_only = 'weights_only' in inspect.signature(_orig_torch_load).parameters
 
     def _torch_load_compat(*a, **k):
-        k.setdefault('weights_only', False)
+        if _supports_weights_only:
+            k.setdefault('weights_only', False)
+        else:
+            k.pop('weights_only', None)
         return _orig_torch_load(*a, **k)
 
     torch.load = _torch_load_compat

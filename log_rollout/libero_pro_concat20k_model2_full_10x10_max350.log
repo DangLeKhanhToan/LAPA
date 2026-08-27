@@ -1,0 +1,138 @@
+[info] Applying task order index 0 (permutation: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) for benchmark 'libero_spatial' (10 tasks).
+[OK] libero_spatial: 10 tasks
+[info] Using default task order for benchmark 'libero_spatial_swap' (10 tasks).
+[OK] libero_spatial_swap: 10 tasks
+[info] Applying task order index 0 (permutation: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) for benchmark 'libero_object' (10 tasks).
+[OK] libero_object: 10 tasks
+[info] Using default task order for benchmark 'libero_object_swap' (10 tasks).
+[OK] libero_object_swap: 10 tasks
+Models: model2 model4 model5
+Suites: libero_spatial libero_spatial_swap libero_object libero_object_swap
+Tasks: 0 1 2 3 4 5 6 7 8 9
+Episodes/task: 10
+Max steps: 350
+Action bins: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/datasets/lapa_libero_v2/action_bins.csv
+Output root: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/rollouts/libero_pro_concat_all_suite_20k
+===== Starting model2 at Thu Aug 27 01:23:02 +08 2026 =====
+[multi-suite] root: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi
+[multi-suite] model: model2
+[multi-suite] suites: libero_spatial libero_spatial_swap libero_object libero_object_swap
+[multi-suite] task ids: 0 1 2 3 4 5 6 7 8 9
+[multi-suite] n eval per task: 10
+[multi-suite] max steps: 350
+[multi-suite] policy template: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/outputs/128_batch_model2_all_suite/streaming_params_20000
+[multi-suite] stage25 template: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/lapa_checkpoints/depth_model/model2.65000.pt
+[multi-suite] action bins: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/datasets/lapa_libero_v2/action_bins.csv
+[multi-suite] output root: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/rollouts/libero_pro_concat_all_suite_20k
+[multi-suite] action fusion: concat
+[multi-suite] export params: false
+============================================================
+[multi-suite] suite: libero_spatial
+[multi-suite] policy: params::/home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/outputs/128_batch_model2_all_suite/streaming_params_20000
+[multi-suite] stage25: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/lapa_checkpoints/depth_model/model2.65000.pt
+[multi-suite] action bins: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/datasets/lapa_libero_v2/action_bins.csv
+[multi-suite] output: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/rollouts/libero_pro_concat_all_suite_20k/concat20k_model2_libero_spatial_tasks10_eps10_max350
+============================================================
+[split-rollout] suite: libero_spatial
+[split-rollout] action fusion: concat
+[split-rollout] finetuned policy: params::/home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/outputs/128_batch_model2_all_suite/streaming_params_20000
+[split-rollout] action bins: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/datasets/lapa_libero_v2/action_bins.csv
+[split-rollout] RGB baseline GPU: 1 mesh=1,1,1,1 port=32822
+[split-rollout] Stage2.5 GPU: 0 port=32821
+[split-rollout] Policy GPU: 2 mesh=1,1,1,1 port=32820
+[split-rollout] Simulator EGL GPU: 0
+[split-rollout] Task IDs: 0 1 2 3 4 5 6 7 8 9
+[split-rollout] Eval per task: 10 | max_steps=350 | progress_freq=25
+[split-rollout] waiting for rgb_feature: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/rollouts/libero_pro_concat_all_suite_20k/concat20k_model2_libero_spatial_tasks10_eps10_max350/server_logs/rgb_feature_gpu1.log
+[split-rollout] still waiting 30s for rgb_feature
+/home/users/create/smrvmdo/scratch/venvs/lapa-depth/lib/python3.10/site-packages/google/api_core/_python_version_support.py:255: FutureWarning: You are using a Python version (3.10.12) which Google will stop supporting in new releases of google.api_core once it reaches its end of life (2026-10-04). Please upgrade to the latest Python version, or at least Python 3.11, to continue receiving updates for google.api_core past that date.
+  warnings.warn(message, FutureWarning)
+/home/users/create/smrvmdo/scratch/venvs/lapa-depth/lib/python3.10/site-packages/google/api_core/_python_version_support.py:255: FutureWarning: You are using a Python version (3.10.12) which Google will stop supporting in new releases of google.cloud._storage_v2 once it reaches its end of life (2026-10-04). Please upgrade to the latest Python version, or at least Python 3.11, to continue receiving updates for google.cloud._storage_v2 past that date.
+  warnings.warn(message, FutureWarning)
+/home/users/create/smrvmdo/scratch/venvs/lapa-depth/lib/python3.10/site-packages/google/api_core/_python_version_support.py:255: FutureWarning: You are using a Python version (3.10.12) which Google will stop supporting in new releases of google.cloud.storage_control_v2 once it reaches its end of life (2026-10-04). Please upgrade to the latest Python version, or at least Python 3.11, to continue receiving updates for google.cloud.storage_control_v2 past that date.
+  warnings.warn(message, FutureWarning)
+{"lapa_rgb_feature_server": {"bundle": "/scratch/users/create/smrvmdo/projects/lapa-depth-modified-levi/Depth_branch", "checkpoint": "params::/home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/lapa_checkpoints/lapa_7b_sth/params", "mesh_dim": "1,1,1,1"}}
+[split-rollout] READY rgb_feature
+[split-rollout] waiting for stage25: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/rollouts/libero_pro_concat_all_suite_20k/concat20k_model2_libero_spatial_tasks10_eps10_max350/server_logs/stage25_split_gpu0.log
+[split-rollout] READY stage25
+[split-rollout] waiting for policy: /home/users/create/smrvmdo/scratch/projects/lapa-depth-modified-levi/rollouts/libero_pro_concat_all_suite_20k/concat20k_model2_libero_spatial_tasks10_eps10_max350/server_logs/policy_gpu2.log
+[split-rollout] READY policy
+[robosuite WARNING] No private macro file found! (__init__.py:7)
+[robosuite WARNING] It is recommended to use a private macro file (__init__.py:8)
+[robosuite WARNING] To setup, run: python /home/users/create/smrvmdo/scratch/venvs/libero-pro-sim/lib/python3.8/site-packages/robosuite/scripts/setup_macros.py (__init__.py:9)
+[Warning]: datasets path /scratch/users/create/smrvmdo/projects/lapa-depth-modified-levi/datasets/LIBERO-PRO/libero/libero/datasets does not exist!
+[info] Applying task order index 0 (permutation: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) for benchmark 'libero_spatial' (10 tasks).
+[Warning]: datasets path /scratch/users/create/smrvmdo/projects/lapa-depth-modified-levi/datasets/LIBERO-PRO/libero/libero/datasets does not exist!
+[libero_spatial] task 0 ep 0 start | max_steps=350 | instruction='pick up the black bowl between the plate and the ramekin and place it on the plate'
+[libero_spatial] task 0 ep 0 step 1/350 | elapsed=0.3m | eta=108.2m | sec_step=18.60
+[libero_spatial] task 0 ep 0 step 25/350 | elapsed=0.4m | eta=5.2m | sec_step=0.97
+[libero_spatial] task 0 ep 0 step 50/350 | elapsed=0.5m | eta=3.0m | sec_step=0.60
+[libero_spatial] task 0 ep 0 step 75/350 | elapsed=0.6m | eta=2.2m | sec_step=0.47
+[libero_spatial] task 0 ep 0 step 100/350 | elapsed=0.7m | eta=1.7m | sec_step=0.41
+[libero_spatial] task 0 ep 0 step 125/350 | elapsed=0.8m | eta=1.4m | sec_step=0.38
+[libero_spatial] task 0 ep 0 step 150/350 | elapsed=0.9m | eta=1.2m | sec_step=0.35
+[libero_spatial] task 0 ep 0 step 175/350 | elapsed=1.0m | eta=1.0m | sec_step=0.33
+[libero_spatial] task 0 ep 0 step 200/350 | elapsed=1.1m | eta=0.8m | sec_step=0.32
+[libero_spatial] task 0 ep 0 step 225/350 | elapsed=1.2m | eta=0.6m | sec_step=0.31
+[libero_spatial] task 0 ep 0 step 250/350 | elapsed=1.3m | eta=0.5m | sec_step=0.30
+[libero_spatial] task 0 ep 0 step 275/350 | elapsed=1.4m | eta=0.4m | sec_step=0.30
+[libero_spatial] task 0 ep 0 step 300/350 | elapsed=1.5m | eta=0.2m | sec_step=0.29
+[libero_spatial] task 0 ep 0 step 325/350 | elapsed=1.5m | eta=0.1m | sec_step=0.29
+[libero_spatial] task 0 ep 0 step 350/350 | elapsed=1.6m | eta=0.0m | sec_step=0.28
+[libero_spatial] task 0 ('pick up the black bowl between the plate and the ramekin and place it on the plate') ep 0: fail | episode_time=1.7m
+[libero_spatial] task 0 ep 1 start | max_steps=350 | instruction='pick up the black bowl between the plate and the ramekin and place it on the plate'
+[libero_spatial] task 0 ep 1 step 1/350 | elapsed=0.0m | eta=1.4m | sec_step=0.24
+[libero_spatial] task 0 ep 1 step 25/350 | elapsed=0.1m | eta=1.2m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 50/350 | elapsed=0.2m | eta=1.1m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 75/350 | elapsed=0.3m | eta=1.0m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 100/350 | elapsed=0.4m | eta=1.0m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 125/350 | elapsed=0.5m | eta=0.9m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 150/350 | elapsed=0.6m | eta=0.8m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 175/350 | elapsed=0.7m | eta=0.7m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 200/350 | elapsed=0.8m | eta=0.6m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 225/350 | elapsed=0.9m | eta=0.5m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 250/350 | elapsed=1.0m | eta=0.4m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 275/350 | elapsed=1.0m | eta=0.3m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 300/350 | elapsed=1.1m | eta=0.2m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 325/350 | elapsed=1.2m | eta=0.1m | sec_step=0.23
+[libero_spatial] task 0 ep 1 step 350/350 | elapsed=1.3m | eta=0.0m | sec_step=0.23
+[libero_spatial] task 0 ('pick up the black bowl between the plate and the ramekin and place it on the plate') ep 1: fail | episode_time=1.4m
+[libero_spatial] task 0 ep 2 start | max_steps=350 | instruction='pick up the black bowl between the plate and the ramekin and place it on the plate'
+[libero_spatial] task 0 ep 2 step 1/350 | elapsed=0.0m | eta=1.4m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 25/350 | elapsed=0.1m | eta=1.2m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 50/350 | elapsed=0.2m | eta=1.1m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 75/350 | elapsed=0.3m | eta=1.0m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 100/350 | elapsed=0.4m | eta=0.9m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 125/350 | elapsed=0.5m | eta=0.8m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 150/350 | elapsed=0.6m | eta=0.8m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 175/350 | elapsed=0.7m | eta=0.7m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 200/350 | elapsed=0.8m | eta=0.6m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 225/350 | elapsed=0.8m | eta=0.5m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 250/350 | elapsed=0.9m | eta=0.4m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 275/350 | elapsed=1.0m | eta=0.3m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 300/350 | elapsed=1.1m | eta=0.2m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 325/350 | elapsed=1.2m | eta=0.1m | sec_step=0.23
+[libero_spatial] task 0 ep 2 step 350/350 | elapsed=1.3m | eta=0.0m | sec_step=0.23
+[libero_spatial] task 0 ('pick up the black bowl between the plate and the ramekin and place it on the plate') ep 2: fail | episode_time=1.3m
+[libero_spatial] task 0 ep 3 start | max_steps=350 | instruction='pick up the black bowl between the plate and the ramekin and place it on the plate'
+[libero_spatial] task 0 ep 3 step 1/350 | elapsed=0.0m | eta=1.4m | sec_step=0.23
+[libero_spatial] task 0 ep 3 step 25/350 | elapsed=0.1m | eta=1.2m | sec_step=0.23
+[libero_spatial] task 0 ep 3 step 50/350 | elapsed=0.2m | eta=1.1m | sec_step=0.23
+[libero_spatial] task 0 ep 3 step 75/350 | elapsed=0.3m | eta=1.0m | sec_step=0.23
+[libero_spatial] task 0 ep 3 step 100/350 | elapsed=0.4m | eta=0.9m | sec_step=0.23
+[libero_spatial] task 0 ep 3 step 125/350 | elapsed=0.5m | eta=0.9m | sec_step=0.23
+[libero_spatial] task 0 ep 3 step 150/350 | elapsed=0.6m | eta=0.8m | sec_step=0.23
+[libero_spatial] task 0 ep 3 step 175/350 | elapsed=0.7m | eta=0.7m | sec_step=0.23
+[libero_spatial] task 0 ep 3 step 200/350 | elapsed=0.8m | eta=0.6m | sec_step=0.23
+[libero_spatial] task 0 ep 3 step 225/350 | elapsed=0.9m | eta=0.5m | sec_step=0.23
+[libero_spatial] task 0 ('pick up the black bowl between the plate and the ramekin and place it on the plate') ep 3: success | episode_time=0.9m
+[libero_spatial] task 0 ep 4 start | max_steps=350 | instruction='pick up the black bowl between the plate and the ramekin and place it on the plate'
+[libero_spatial] task 0 ep 4 step 1/350 | elapsed=0.0m | eta=1.4m | sec_step=0.24
+[libero_spatial] task 0 ep 4 step 25/350 | elapsed=0.1m | eta=1.2m | sec_step=0.23
+[libero_spatial] task 0 ep 4 step 50/350 | elapsed=0.2m | eta=1.1m | sec_step=0.23
+[libero_spatial] task 0 ep 4 step 75/350 | elapsed=0.3m | eta=1.0m | sec_step=0.23
+[libero_spatial] task 0 ep 4 step 100/350 | elapsed=0.4m | eta=0.9m | sec_step=0.23
+[libero_spatial] task 0 ep 4 step 125/350 | elapsed=0.5m | eta=0.9m | sec_step=0.23
+[libero_spatial] task 0 ep 4 step 150/350 | elapsed=0.6m | eta=0.8m | sec_step=0.23
+[libero_spatial] task 0 ep 4 step 175/350 | elapsed=0.7m | eta=0.7m | sec_step=0.23
+[libero_spatial] task 0 ep 4 step 200/350 | elapsed=0.8m | eta=0.6m | sec_step=0.23

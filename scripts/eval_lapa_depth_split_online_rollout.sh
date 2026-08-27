@@ -12,7 +12,7 @@ LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
 LIBERO_REPO="${LIBERO_REPO:?Set LIBERO_REPO to the simulator repository}"
 DEPTH_BRANCH_ROOT="${DEPTH_BRANCH_ROOT:?Set DEPTH_BRANCH_ROOT to the Stage-2.5 source bundle}"
 SUITE="${SUITE:?Set SUITE to the evaluation split}"
-ACTION_SCALE_FILE="${ACTION_SCALE_FILE:?Set ACTION_SCALE_FILE to this split's bin-edge CSV}"
+ACTION_SCALE_FILE="${ACTION_SCALE_FILE:?Set ACTION_SCALE_FILE to this split bin-edge CSV}"
 ACTION_FUSION_METHOD="${ACTION_FUSION_METHOD:-project}"
 case "$ACTION_FUSION_METHOD" in
   project|concat) ;;
@@ -110,7 +110,7 @@ wait_for_log() {
     if (( i % 30 == 0 )); then
       echo "[split-rollout] still waiting ${i}s for $name"
       tail -40 "$log" || true
-      nvidia-smi || true
+      # nvidia-smi || true
     fi
     sleep 1
   done
