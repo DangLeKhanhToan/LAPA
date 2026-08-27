@@ -1,5 +1,6 @@
 import pprint
 import os
+import inspect
 import shutil
 import subprocess
 import copy
@@ -301,6 +302,34 @@ def main(argv):
 
     if FLAGS.update_llama_config != '':
         llama_config.update(dict(eval(FLAGS.update_llama_config)))
+
+    attention_backend = getattr(llama_config, "attention_backend", "ring")
+    platform = jax.default_backend()
+    attention_runtime = {
+        "requested_backend": attention_backend,
+        "jax_backend": platform,
+        "jax_version": getattr(jax, "__version__", "unknown"),
+        "jaxlib_version": getattr(jax.lib, "__version__", "unknown"),
+        "devices": [str(device) for device in jax.devices()],
+    }
+    if attention_backend == "cudnn":
+        dpa = getattr(jax.nn, "dot_product_attention", None)
+        if platform not in ("gpu", "cuda"):
+            raise RuntimeError(
+                "attention_backend='cudnn' was requested but JAX is using "
+                f"backend={platform!r}. Check the CUDA JAX installation."
+            )
+        if dpa is None or "implementation" not in inspect.signature(dpa).parameters:
+            raise RuntimeError(
+                "attention_backend='cudnn' requires a recent JAX CUDA build "
+                "whose jax.nn.dot_product_attention supports the implementation "
+                "argument. The repository's legacy JAX 0.4.23 environment is "
+                "not sufficient."
+            )
+        attention_runtime["effective_backend"] = "cudnn"
+    else:
+        attention_runtime["effective_backend"] = "ring"
+    _runtime_log("attention_backend", attention_runtime)
 
     llama_config.update(dict(
         bos_token_id=dataset.tokenizer.bos_token_id,

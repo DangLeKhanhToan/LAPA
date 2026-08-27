@@ -21,6 +21,9 @@ logs/
 run_job*
 job_scripts/
 scripts/local/
+!scripts/local/
+scripts/local/*
+!scripts/local/run_job.pbs
 .env
 .env.*
 !.env.example

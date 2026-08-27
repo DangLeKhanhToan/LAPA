@@ -208,6 +208,7 @@ class LLaMAConfig(PretrainedConfig):
         param_scan_axis=0,
         mesh_dim=None,
         use_flash_attention=True,
+        attention_backend='ring',
         theta=10000,
         **kwargs,
     ):
@@ -238,6 +239,12 @@ class LLaMAConfig(PretrainedConfig):
         self.param_scan_axis = param_scan_axis
         self.mesh_dim = mesh_dim
         self.use_flash_attention = use_flash_attention
+        if attention_backend not in ('ring', 'cudnn'):
+            raise ValueError(
+                "attention_backend must be 'ring' or 'cudnn', "
+                f"got {attention_backend!r}"
+            )
+        self.attention_backend = attention_backend
         self.theta = theta
         super().__init__(
             bos_token_id=bos_token_id,
@@ -608,6 +615,52 @@ class FlaxLLaMAAttention(nn.Module):
         freqs_cis = jnp.take(self.freqs_cis, position_ids, axis=0)
 
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis, dtype=self.dtype)
+
+        # NVIDIA fused-attention path. Select it before the legacy scan/ring
+        # branches: at the Stage-3 sequence length (384), the scan condition is
+        # false, so the old use_flash_attention flag never selected a fused GPU
+        # kernel. Cache decoding remains on the legacy path; this backend is for
+        # full-sequence training.
+        if self.config.attention_backend == 'cudnn' and not (
+            self.has_variable("cache", "cached_key") or init_cache
+        ):
+            platform = xla_bridge.get_backend().platform
+            if platform not in ('gpu', 'cuda'):
+                raise RuntimeError(
+                    "attention_backend='cudnn' requires a JAX CUDA backend; "
+                    f"detected platform={platform!r}"
+                )
+            dot_product_attention = getattr(jax.nn, 'dot_product_attention', None)
+            if dot_product_attention is None:
+                raise RuntimeError(
+                    "This JAX version does not provide jax.nn.dot_product_attention. "
+                    "Install a recent matching JAX/jaxlib CUDA build with cuDNN "
+                    "FlashAttention support."
+                )
+            try:
+                attn_output = dot_product_attention(
+                    query=xq,
+                    key=xk,
+                    value=xv,
+                    is_causal=True,
+                    implementation='cudnn',
+                )
+            except TypeError as exc:
+                raise RuntimeError(
+                    "The installed JAX dot_product_attention API does not accept "
+                    "implementation='cudnn'. Upgrade the JAX CUDA environment."
+                ) from exc
+            attn_output = with_sharding_constraint(
+                attn_output, PS(("dp", "fsdp"), "sp", "tp", None)
+            )
+            attn_output = self._merge_heads(attn_output)
+            attn_output = self.wo(attn_output)
+            attn_output = self.resid_dropout(
+                attn_output, deterministic=deterministic
+            )
+            return (
+                (attn_output, None) if output_attentions else (attn_output,)
+            )
 
         dropout_rng = None
         if not deterministic and self.config.attn_pdrop > 0.0:

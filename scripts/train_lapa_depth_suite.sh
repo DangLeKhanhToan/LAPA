@@ -33,6 +33,7 @@ Options:
   --mesh-dim DIM               JAX mesh_dim. Default: !-1,4,1,1.
   --lr VALUE                   Learning rate. Default: 2e-5.
   --action-fusion METHOD       project or concat. Default: project.
+  --attention-backend NAME     ring or cudnn. Default: ring.
   --save-model-freq N          Save latest params/train-state frequency. Default: total steps.
   --save-milestone-freq N      Save milestone train-state/params frequency. Default: 0.
   --keep-last-milestones N     Keep only last N milestone steps; 0 keeps all. Default: 1.
@@ -131,6 +132,7 @@ SEQ_LENGTH="384"
 MESH_DIM="!-1,4,1,1"
 LR="2e-5"
 ACTION_FUSION_METHOD="project"
+ATTENTION_BACKEND="ring"
 SAVE_MODEL_FREQ=""
 SAVE_MILESTONE_FREQ="0"
 KEEP_LAST_MILESTONES="1"
@@ -161,6 +163,7 @@ while [[ $# -gt 0 ]]; do
     --mesh-dim) MESH_DIM="$2"; shift 2 ;;
     --lr) LR="$2"; shift 2 ;;
     --action-fusion) ACTION_FUSION_METHOD="$2"; shift 2 ;;
+    --attention-backend) ATTENTION_BACKEND="$2"; shift 2 ;;
     --save-model-freq) SAVE_MODEL_FREQ="$2"; shift 2 ;;
     --save-milestone-freq) SAVE_MILESTONE_FREQ="$2"; shift 2 ;;
     --keep-last-milestones) KEEP_LAST_MILESTONES="$2"; shift 2 ;;
@@ -190,6 +193,10 @@ case "$ACTION_FUSION_METHOD" in
   project|concat) ;;
   *) echo "ERROR: --action-fusion must be project or concat" >&2; exit 1 ;;
 esac
+case "$ATTENTION_BACKEND" in
+  ring|cudnn) ;;
+  *) echo "ERROR: --attention-backend must be ring or cudnn" >&2; exit 1 ;;
+esac
 case "$SAVE_OPTIMIZER_STATE" in
   true|false|True|False) ;;
   *) echo "ERROR: --save-optimizer-state must be true or false" >&2; exit 1 ;;
@@ -212,6 +219,7 @@ echo "[train-depth] root: $LAPA_ROOT"
 echo "[train-depth] suite: $SUITE"
 echo "[train-depth] model: $STAGE25_MODEL_NAME"
 echo "[train-depth] fusion: $ACTION_FUSION_METHOD"
+echo "[train-depth] attention backend: $ATTENTION_BACKEND"
 echo "[train-depth] train jsonl: $TRAIN_JSONL"
 echo "[train-depth] image root: $IMAGE_ROOT"
 echo "[train-depth] depth dir: $DEPTH_DATA_DIR"
@@ -242,7 +250,7 @@ python_args=(
   --diagnose_numerics="${DIAGNOSE_NUMERICS:-False}"
   --load_llama_config="7b"
   --load_checkpoint="params::$LAPA_PARAMS"
-  --update_llama_config="dict(action_vocab_size=${ACTION_VOCAB_SIZE},depth_feature_dim=1024,action_fusion_method='${ACTION_FUSION_METHOD}',delta_vocab_size=8,theta=50000000,max_sequence_length=2048,use_flash_attention=True,scan_attention=True,scan_query_chunk_size=512,scan_key_chunk_size=1024,remat_attention='nothing_saveable',scan_mlp=True,scan_mlp_chunk_size=8192,remat_mlp='nothing_saveable',remat_block='nothing_saveable',scan_layers=True)"
+  --update_llama_config="dict(action_vocab_size=${ACTION_VOCAB_SIZE},depth_feature_dim=1024,action_fusion_method='${ACTION_FUSION_METHOD}',attention_backend='${ATTENTION_BACKEND}',delta_vocab_size=8,theta=50000000,max_sequence_length=2048,use_flash_attention=True,scan_attention=True,scan_query_chunk_size=512,scan_key_chunk_size=1024,remat_attention='nothing_saveable',scan_mlp=True,scan_mlp_chunk_size=8192,remat_mlp='nothing_saveable',remat_block='nothing_saveable',scan_layers=True)"
   --tokenizer.vocab_file="$TOKENIZER_PATH"
   --optimizer.type="adamw"
   --llama.action_vocab_size="$ACTION_VOCAB_SIZE"

@@ -1,0 +1,264 @@
+#!/bin/bash
+#PBS -N lapa_depth_train
+#PBS -q normal
+#PBS -P 11714283
+#PBS -l select=1:ncpus=56:ngpus=4
+#PBS -l walltime=24:00:00
+#PBS -j oe
+
+set -Eeuo pipefail
+
+# Local/private PBS launcher. This file lives under scripts/local/, which is
+# git-ignored. Submit it with short qsub -v overrides, e.g.
+#
+# qsub -v MODEL=model5,SUITE=libero_spatial,RESUME=True,AUTORESUME=True,SAVE_OPTIMIZER_STATE=True,TOTAL_STEPS=20000 scripts/local/run_job.pbs
+#
+# Concat training example:
+# qsub -v MODEL=model5,MODE=concat,CONCAT_NAME=all_suite,RESUME=False,TOTAL_STEPS=20000 scripts/local/run_job.pbs
+
+cd ~/scratch/projects/lapa-depth-modified-levi
+VENV_PATH="${VENV_PATH:-$HOME/scratch/venvs/lapa-depth}"
+source "$VENV_PATH/bin/activate"
+
+export LAPA_ROOT="$(pwd -P)"
+export PYTHONPATH="$LAPA_ROOT:$LAPA_ROOT/datasets/LIBERO:${PYTHONPATH:-}"
+
+MODEL="${MODEL:-model5}"                 # Stage-2.5 model: model2, model4, model5
+MODE="${MODE:-suite}"                    # suite or concat
+SUITE="${SUITE:-libero_spatial}"         # Used when MODE=suite
+CONCAT_NAME="${CONCAT_NAME:-all_suite}"  # Logical name for concat output
+CONCAT_SUITES="${CONCAT_SUITES:-libero_spatial libero_object libero_goal libero_90}"
+
+# Data layout. v2 is the default training data layout in this repo snapshot.
+# Override DATA_VERSION=v1 if you want datasets/lapa_libero_v1.
+DATA_VERSION="${DATA_VERSION:-v2}"
+if [[ "$DATA_VERSION" == "v1" ]]; then
+  DATA_ROOT="${DATA_ROOT:-$LAPA_ROOT/datasets/lapa_libero_v1}"
+else
+  DATA_ROOT="${DATA_ROOT:-$LAPA_ROOT/datasets/lapa_libero_v2}"
+fi
+FEATURE_ROOT="${FEATURE_ROOT:-$LAPA_ROOT/datasets/features_depth_branch}"
+
+# Checkpoints.
+TOKENIZER="${TOKENIZER:-$LAPA_ROOT/lapa_checkpoints/lapa_7b_sth/tokenizer.model}"
+if [[ ! -f "$TOKENIZER" ]]; then
+  TOKENIZER="$LAPA_ROOT/lapa_checkpoints/tokenizer.model"
+fi
+VQGAN="${VQGAN:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
+INIT_PARAMS="${INIT_PARAMS:-$LAPA_ROOT/lapa_checkpoints/lapa_7b_sth/params}"
+
+# Stage-3 hyperparameters.
+TOTAL_STEPS="${TOTAL_STEPS:-20000}"
+BATCH_SIZE="${BATCH_SIZE:-128}"
+LR="${LR:-2e-5}"
+MESH_DIM="${MESH_DIM:-!-1,4,1,1}"
+SEQ_LENGTH="${SEQ_LENGTH:-384}"
+ATTENTION_BACKEND="${ATTENTION_BACKEND:-ring}" # ring or cudnn
+export EXPECTED_GPU_COUNT="${EXPECTED_GPU_COUNT:-4}"
+
+# Checkpointing.
+# streaming_params is params-only for rollout.
+# streaming_train_state is exact-resume state.
+SAVE_MODEL_FREQ="${SAVE_MODEL_FREQ:-$TOTAL_STEPS}"
+SAVE_MILESTONE_FREQ="${SAVE_MILESTONE_FREQ:-5000}"
+KEEP_LAST_MILESTONES="${KEEP_LAST_MILESTONES:-1}"
+SAVE_OPTIMIZER_STATE="${SAVE_OPTIMIZER_STATE:-True}"
+AUTORESUME="${AUTORESUME:-False}"
+RESUME="${RESUME:-False}"
+case "$RESUME" in
+  True|true|1) AUTORESUME=True ;;
+esac
+
+OUTPUT_DIR="${OUTPUT_DIR:-$LAPA_ROOT/outputs}"
+LOG_ROOT="${LOG_ROOT:-$LAPA_ROOT/logs}"
+mkdir -p "$LOG_ROOT"
+
+ACTION_FUSION="${ACTION_FUSION:-}"
+TRAIN_JSONL="${TRAIN_JSONL:-}"
+DEPTH_DIR="${DEPTH_DIR:-}"
+DEPTH_MANIFEST="${DEPTH_MANIFEST:-}"
+ACTION_BINS="${ACTION_BINS:-}"
+TRAIN_SUITE_LABEL="$SUITE"
+
+case "$MODE" in
+  suite)
+    TRAIN_SUITE_LABEL="$SUITE"
+    ACTION_FUSION="${ACTION_FUSION:-project}"
+    ;;
+
+  concat)
+    TRAIN_SUITE_LABEL="$CONCAT_NAME"
+    ACTION_FUSION="${ACTION_FUSION:-concat}"
+    mkdir -p "$DATA_ROOT/combined"
+
+    if [[ -z "$TRAIN_JSONL" ]]; then
+      if [[ -f "$DATA_ROOT/all_train.jsonl" ]]; then
+        TRAIN_JSONL="$DATA_ROOT/all_train.jsonl"
+      else
+        TRAIN_JSONL="$DATA_ROOT/combined/${CONCAT_NAME}_train.jsonl"
+        : > "$TRAIN_JSONL"
+        for split in $CONCAT_SUITES; do
+          if [[ -f "$DATA_ROOT/${split}_train.jsonl" ]]; then
+            cat "$DATA_ROOT/${split}_train.jsonl" >> "$TRAIN_JSONL"
+          else
+            cat "$DATA_ROOT/${split}.jsonl" >> "$TRAIN_JSONL"
+          fi
+        done
+      fi
+    fi
+
+    if [[ -z "$DEPTH_DIR" ]]; then
+      DEPTH_DIR=""
+      DEPTH_MANIFEST=""
+      for split in $CONCAT_SUITES; do
+        dir="$FEATURE_ROOT/stage25_libero_features_${MODEL}/$split/stage25_${MODEL}/z_depth_train_shard0"
+        mapfile -t manifests < <(find "$dir" -maxdepth 1 -type f -name '*manifest.json' | sort)
+        if [[ "${#manifests[@]}" -ne 1 ]]; then
+          echo "ERROR: expected one manifest for $split in $dir, found ${#manifests[@]}" >&2
+          printf '  %s\n' "${manifests[@]}" >&2
+          exit 1
+        fi
+        if [[ -z "$DEPTH_DIR" ]]; then
+          DEPTH_DIR="$dir"
+          DEPTH_MANIFEST="${manifests[0]}"
+        else
+          DEPTH_DIR="$DEPTH_DIR,$dir"
+          DEPTH_MANIFEST="$DEPTH_MANIFEST,${manifests[0]}"
+        fi
+      done
+    fi
+
+    if [[ -z "$ACTION_BINS" ]]; then
+      if [[ -f "$DATA_ROOT/action_bins.csv" ]]; then
+        ACTION_BINS="$DATA_ROOT/action_bins.csv"
+      else
+        ACTION_BINS="$DATA_ROOT/action_bins_libero_spatial.csv"
+      fi
+    fi
+    ;;
+
+  *)
+    echo "ERROR: MODE must be suite or concat. Got: $MODE" >&2
+    exit 1
+    ;;
+esac
+
+EXPERIMENT_ID="${EXPERIMENT_ID:-${BATCH_SIZE}_batch_${MODEL}_${TRAIN_SUITE_LABEL}}"
+RUN_INDEX="${RUN_INDEX:-1}"
+JOB_ID="${PBS_JOBID:-manual}"
+TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+LOG_FILE="$LOG_ROOT/${EXPERIMENT_ID}_${RUN_INDEX}_${JOB_ID}_${TIMESTAMP}.log"
+
+echo "============================================================" | tee -a "$LOG_FILE"
+echo "Job ID:               $JOB_ID" | tee -a "$LOG_FILE"
+echo "Host:                 $(hostname)" | tee -a "$LOG_FILE"
+echo "Mode:                 $MODE" | tee -a "$LOG_FILE"
+echo "Stage-2.5 model:      $MODEL" | tee -a "$LOG_FILE"
+echo "Suite:                $SUITE" | tee -a "$LOG_FILE"
+echo "Concat suites:        $CONCAT_SUITES" | tee -a "$LOG_FILE"
+echo "Data root:            $DATA_ROOT" | tee -a "$LOG_FILE"
+echo "Feature root:         $FEATURE_ROOT" | tee -a "$LOG_FILE"
+echo "Experiment ID:        $EXPERIMENT_ID" | tee -a "$LOG_FILE"
+echo "Output:               $OUTPUT_DIR/$EXPERIMENT_ID" | tee -a "$LOG_FILE"
+echo "Train JSONL:          ${TRAIN_JSONL:-<auto per suite>}" | tee -a "$LOG_FILE"
+echo "Depth dir:            ${DEPTH_DIR:-<auto per suite>}" | tee -a "$LOG_FILE"
+echo "Depth manifest:       ${DEPTH_MANIFEST:-<auto per suite>}" | tee -a "$LOG_FILE"
+echo "Action bins:          ${ACTION_BINS:-<auto per suite>}" | tee -a "$LOG_FILE"
+echo "Action fusion:        $ACTION_FUSION" | tee -a "$LOG_FILE"
+echo "Attention backend:    $ATTENTION_BACKEND" | tee -a "$LOG_FILE"
+echo "Python environment:   $VENV_PATH" | tee -a "$LOG_FILE"
+echo "Total steps:          $TOTAL_STEPS" | tee -a "$LOG_FILE"
+echo "Batch size:           $BATCH_SIZE" | tee -a "$LOG_FILE"
+echo "Learning rate:        $LR" | tee -a "$LOG_FILE"
+echo "Mesh dim:             $MESH_DIM" | tee -a "$LOG_FILE"
+echo "Save model freq:      $SAVE_MODEL_FREQ" | tee -a "$LOG_FILE"
+echo "Save milestone freq:  $SAVE_MILESTONE_FREQ" | tee -a "$LOG_FILE"
+echo "Keep milestones:      $KEEP_LAST_MILESTONES" | tee -a "$LOG_FILE"
+echo "Save optimizer state: $SAVE_OPTIMIZER_STATE" | tee -a "$LOG_FILE"
+echo "Autoresume:           $AUTORESUME" | tee -a "$LOG_FILE"
+echo "Log file:             $LOG_FILE" | tee -a "$LOG_FILE"
+echo "Start time:           $(date)" | tee -a "$LOG_FILE"
+echo "============================================================" | tee -a "$LOG_FILE"
+
+nvidia-smi | tee -a "$LOG_FILE" || true
+python - <<'PY' 2>&1 | tee -a "$LOG_FILE"
+import inspect
+import os
+import jax
+
+dpa = getattr(jax.nn, "dot_product_attention", None)
+print("python_jax_executable_check=ok")
+print("jax_version=", getattr(jax, "__version__", "unknown"))
+print("jaxlib_version=", getattr(jax.lib, "__version__", "unknown"))
+print("jax_backend=", jax.default_backend())
+print("jax_device_count=", jax.device_count())
+print("jax_devices=", jax.devices())
+print("dpa_available=", dpa is not None)
+print(
+    "dpa_cudnn_api_available=",
+    dpa is not None and "implementation" in inspect.signature(dpa).parameters,
+)
+expected_gpu_count = int(os.environ.get("EXPECTED_GPU_COUNT", "4"))
+if jax.default_backend() not in ("gpu", "cuda"):
+    raise SystemExit("ERROR: JAX is not using CUDA")
+if jax.device_count() != expected_gpu_count:
+    raise SystemExit(
+        f"ERROR: expected {expected_gpu_count} JAX GPU devices, "
+        f"found {jax.device_count()}"
+    )
+PY
+if [[ -n "$TRAIN_JSONL" && -f "$TRAIN_JSONL" ]]; then
+  wc -l "$TRAIN_JSONL" | tee -a "$LOG_FILE"
+fi
+
+cmd=(
+  bash scripts/train_lapa_depth_suite.sh
+  --lapa-root "$LAPA_ROOT"
+  --suite "$TRAIN_SUITE_LABEL"
+  --model "$MODEL"
+  --data-root "$DATA_ROOT"
+  --feature-root "$FEATURE_ROOT"
+  --tokenizer "$TOKENIZER"
+  --vqgan "$VQGAN"
+  --init-params "$INIT_PARAMS"
+  --output-dir "$OUTPUT_DIR"
+  --experiment-id "$EXPERIMENT_ID"
+  --total-steps "$TOTAL_STEPS"
+  --batch-size "$BATCH_SIZE"
+  --seq-length "$SEQ_LENGTH"
+  --mesh-dim "$MESH_DIM"
+  --lr "$LR"
+  --action-fusion "$ACTION_FUSION"
+  --attention-backend "$ATTENTION_BACKEND"
+  --save-model-freq "$SAVE_MODEL_FREQ"
+  --save-milestone-freq "$SAVE_MILESTONE_FREQ"
+  --keep-last-milestones "$KEEP_LAST_MILESTONES"
+  --save-optimizer-state "$SAVE_OPTIMIZER_STATE"
+  --autoresume "$AUTORESUME"
+)
+
+if [[ -n "$TRAIN_JSONL" ]]; then
+  cmd+=(--train-jsonl "$TRAIN_JSONL")
+fi
+if [[ -n "$DEPTH_DIR" ]]; then
+  cmd+=(--depth-dir "$DEPTH_DIR")
+fi
+if [[ -n "$DEPTH_MANIFEST" ]]; then
+  cmd+=(--depth-manifest "$DEPTH_MANIFEST")
+fi
+if [[ -n "$ACTION_BINS" ]]; then
+  cmd+=(--action-bins "$ACTION_BINS")
+fi
+
+set +e
+"${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"
+EXIT_CODE=${PIPESTATUS[0]}
+set -e
+
+echo "============================================================" | tee -a "$LOG_FILE"
+echo "End time:  $(date)" | tee -a "$LOG_FILE"
+echo "Exit code: $EXIT_CODE" | tee -a "$LOG_FILE"
+echo "Log file:  $LOG_FILE" | tee -a "$LOG_FILE"
+echo "============================================================" | tee -a "$LOG_FILE"
+
+exit "$EXIT_CODE"
