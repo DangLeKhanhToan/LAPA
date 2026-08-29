@@ -24,6 +24,8 @@ scripts/local/
 !scripts/local/
 scripts/local/*
 !scripts/local/run_job.pbs
+!scripts/local/finetune_lapa_comparison.sh
+!scripts/local/prepare_lapa_depth_bundle.sh
 .env
 .env.*
 !.env.example

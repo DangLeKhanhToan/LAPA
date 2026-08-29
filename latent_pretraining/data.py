@@ -2162,6 +2162,7 @@ class JsonDeltaActionDataset(object):
         config.depth_feature_id_key = 'auto'
         config.depth_feature_dim = 1024
         config.depth_feature_preload = False
+        config.depth_feature_bundle = ''
 
         if updates is not None:
             config.update(ConfigDict(updates).copy_and_resolve_references())
@@ -2180,7 +2181,26 @@ class JsonDeltaActionDataset(object):
         self._total_tokens = 0
         self._data = self._load_and_shuffle_data()
         self._depth_index = None
-        if self.config.depth_feature_data_dir:
+        if self.config.depth_feature_bundle:
+            from latent_pretraining.depth_fusion.data_libero import PackedDepthFeatureIndex
+
+            self._depth_index = PackedDepthFeatureIndex(
+                Path(self.config.depth_feature_bundle),
+                expected_dim=self.config.depth_feature_dim,
+            )
+            print(
+                json.dumps(
+                    {
+                        "packed_depth_features": {
+                            "samples": len(self._depth_index),
+                            "bundle": str(self.config.depth_feature_bundle),
+                            "dtype": str(self._depth_index.features.dtype),
+                            "shape": list(self._depth_index.features.shape),
+                        }
+                    }
+                )
+            )
+        elif self.config.depth_feature_data_dir:
             import torch
 
             from latent_pretraining.depth_fusion.data_libero import (

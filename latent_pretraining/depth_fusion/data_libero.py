@@ -224,6 +224,61 @@ class ShardFieldIndex:
         return _value_at(shard[self.value_key], local_index)
 
 
+class PackedDepthFeatureIndex:
+    """In-memory index for a prejoined, contiguous depth-feature bundle.
+
+    The bundle is produced once before training. Unlike ``ShardFieldIndex``, it
+    never opens source feature shards from the batch construction hot path.
+    """
+
+    FORMAT = "lapa_depth_feature_bundle_v1"
+
+    def __init__(self, bundle_path: Path, expected_dim: Optional[int] = None):
+        self.bundle_path = Path(bundle_path)
+        try:
+            bundle = torch.load(self.bundle_path, map_location="cpu", weights_only=False)
+        except TypeError:  # PyTorch releases before the weights_only argument.
+            bundle = torch.load(self.bundle_path, map_location="cpu")
+        if bundle.get("format") != self.FORMAT:
+            raise ValueError(
+                f"Unsupported depth bundle format in {self.bundle_path}: "
+                f"{bundle.get('format')!r}"
+            )
+
+        ids = bundle.get("ids")
+        features = bundle.get("depth_features")
+        if not isinstance(ids, (list, tuple)) or not torch.is_tensor(features):
+            raise TypeError(
+                f"{self.bundle_path} must contain an ids list and a depth_features tensor"
+            )
+        if features.ndim != 2 or len(ids) != int(features.shape[0]):
+            raise ValueError(
+                f"Invalid packed depth shapes: ids={len(ids)}, features={tuple(features.shape)}"
+            )
+        if expected_dim is not None and int(features.shape[1]) != int(expected_dim):
+            raise ValueError(
+                f"Expected depth feature dim {expected_dim}, got {features.shape[1]}"
+            )
+
+        self.features = features.contiguous()
+        self.metadata = bundle.get("metadata", {})
+        self._rows = {}
+        for row, sample_id in enumerate(ids):
+            sample_id = str(sample_id)
+            if sample_id in self._rows:
+                raise ValueError(f"Duplicate sample id in packed depth bundle: {sample_id}")
+            self._rows[sample_id] = row
+
+    def __contains__(self, sample_id: str) -> bool:
+        return str(sample_id) in self._rows
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    def get(self, sample_id: str) -> torch.Tensor:
+        return self.features[self._rows[str(sample_id)]]
+
+
 class JsonlActionIndex:
     """Maps sample ids to action vectors from a JSONL demonstration file."""
 

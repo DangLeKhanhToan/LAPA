@@ -278,6 +278,7 @@ def main(argv):
             "seq_length": seq_length,
             "vocab_size": getattr(dataset, "vocab_size", None),
             "depth_feature_dir": getattr(FLAGS.train_dataset.json_delta_action_dataset, "depth_feature_data_dir", ""),
+            "depth_feature_bundle": getattr(FLAGS.train_dataset.json_delta_action_dataset, "depth_feature_bundle", ""),
             "depth_feature_dim": getattr(FLAGS.train_dataset.json_delta_action_dataset, "depth_feature_dim", None),
         },
     )
@@ -344,6 +345,7 @@ def main(argv):
     )
     use_depth_features = bool(
         getattr(FLAGS.train_dataset.json_delta_action_dataset, "depth_feature_data_dir", "")
+        or getattr(FLAGS.train_dataset.json_delta_action_dataset, "depth_feature_bundle", "")
     )
 
     optimizer, optimizer_info = OptimizerFactory.get_optimizer(

@@ -21,6 +21,8 @@ Options:
   --depth-dir PATH              Offline depth-feature directory. Supports comma-separated dirs for concat/all-suite.
   --depth-manifest PATH         Optional depth manifest path. Supports comma-separated manifests.
                                 If omitted, each depth dir is searched for exactly one *manifest.json.
+  --depth-bundle PATH           Prejoined bundle from build_lapa_depth_bundle.py. Preferred for training.
+  --no-depth                    Run the RGB-only LAPA baseline through the same launcher.
   --action-bins PATH            Action-bin CSV. Default: <data-root>/action_bins_<suite>.csv, else <data-root>/action_bins.csv.
   --tokenizer PATH              Tokenizer model. Default: <root>/lapa_checkpoints/lapa_7b_sth/tokenizer.model, else tokenizer.model.
   --vqgan PATH                  VQGAN checkpoint. Default: <root>/lapa_checkpoints/vqgan.
@@ -120,6 +122,8 @@ TRAIN_JSONL=""
 IMAGE_ROOT=""
 DEPTH_DATA_DIR=""
 DEPTH_MANIFEST=""
+DEPTH_BUNDLE=""
+NO_DEPTH="false"
 ACTION_SCALE_FILE=""
 TOKENIZER_PATH=""
 VQGAN_CKPT=""
@@ -151,6 +155,8 @@ while [[ $# -gt 0 ]]; do
     --image-root) IMAGE_ROOT="$2"; shift 2 ;;
     --depth-dir) DEPTH_DATA_DIR="$2"; shift 2 ;;
     --depth-manifest) DEPTH_MANIFEST="$2"; shift 2 ;;
+    --depth-bundle) DEPTH_BUNDLE="$2"; shift 2 ;;
+    --no-depth) NO_DEPTH="true"; shift ;;
     --action-bins) ACTION_SCALE_FILE="$2"; shift 2 ;;
     --tokenizer) TOKENIZER_PATH="$2"; shift 2 ;;
     --vqgan) VQGAN_CKPT="$2"; shift 2 ;;
@@ -179,8 +185,17 @@ DATA_ROOT="${DATA_ROOT:-$(resolve_data_root "$LAPA_ROOT")}"
 FEATURE_ROOT="${FEATURE_ROOT:-$LAPA_ROOT/datasets/features_depth_branch}"
 TRAIN_JSONL="${TRAIN_JSONL:-$(resolve_train_jsonl "$DATA_ROOT" "$SUITE")}"
 IMAGE_ROOT="${IMAGE_ROOT:-$DATA_ROOT/}"
-DEPTH_DATA_DIR="${DEPTH_DATA_DIR:-$FEATURE_ROOT/stage25_libero_features_${STAGE25_MODEL_NAME}/$SUITE/stage25_${STAGE25_MODEL_NAME}/z_depth_train_shard0}"
-DEPTH_MANIFEST="${DEPTH_MANIFEST:-$(resolve_depth_manifests "$DEPTH_DATA_DIR")}"
+if [[ "$NO_DEPTH" == "true" ]]; then
+  DEPTH_DATA_DIR=""
+  DEPTH_MANIFEST=""
+  DEPTH_BUNDLE=""
+elif [[ -n "$DEPTH_BUNDLE" ]]; then
+  DEPTH_DATA_DIR=""
+  DEPTH_MANIFEST=""
+else
+  DEPTH_DATA_DIR="${DEPTH_DATA_DIR:-$FEATURE_ROOT/stage25_libero_features_${STAGE25_MODEL_NAME}/$SUITE/stage25_${STAGE25_MODEL_NAME}/z_depth_train_shard0}"
+  DEPTH_MANIFEST="${DEPTH_MANIFEST:-$(resolve_depth_manifests "$DEPTH_DATA_DIR")}"
+fi
 ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$(resolve_action_bins "$DATA_ROOT" "$SUITE")}"
 TOKENIZER_PATH="${TOKENIZER_PATH:-$(resolve_tokenizer "$LAPA_ROOT")}"
 VQGAN_CKPT="${VQGAN_CKPT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
@@ -207,6 +222,7 @@ case "$AUTORESUME" in
 esac
 
 [[ -f "$TRAIN_JSONL" ]] || { echo "ERROR: train JSONL not found: $TRAIN_JSONL" >&2; exit 1; }
+[[ -z "$DEPTH_BUNDLE" || -f "$DEPTH_BUNDLE" ]] || { echo "ERROR: depth bundle not found: $DEPTH_BUNDLE" >&2; exit 1; }
 [[ -f "$ACTION_SCALE_FILE" ]] || { echo "ERROR: action bins CSV not found: $ACTION_SCALE_FILE" >&2; exit 1; }
 [[ -f "$TOKENIZER_PATH" ]] || { echo "ERROR: tokenizer not found: $TOKENIZER_PATH" >&2; exit 1; }
 [[ -e "$VQGAN_CKPT" ]] || { echo "ERROR: VQGAN checkpoint not found: $VQGAN_CKPT" >&2; exit 1; }
@@ -224,6 +240,8 @@ echo "[train-depth] train jsonl: $TRAIN_JSONL"
 echo "[train-depth] image root: $IMAGE_ROOT"
 echo "[train-depth] depth dir: $DEPTH_DATA_DIR"
 echo "[train-depth] depth manifest: ${DEPTH_MANIFEST:-<none>}"
+echo "[train-depth] depth bundle: ${DEPTH_BUNDLE:-<none>}"
+echo "[train-depth] RGB-only baseline: $NO_DEPTH"
 echo "[train-depth] action bins: $ACTION_SCALE_FILE"
 echo "[train-depth] action vocab size: $ACTION_VOCAB_SIZE"
 echo "[train-depth] init params: $LAPA_PARAMS"
@@ -295,6 +313,10 @@ python_args=(
   --logger.output_dir="$OUTPUT_DIR"
   --logger.wandb_dir="$WANDB_DIR"
 )
+
+if [[ -n "$DEPTH_BUNDLE" ]]; then
+  python_args+=(--train_dataset.json_delta_action_dataset.depth_feature_bundle="$DEPTH_BUNDLE")
+fi
 
 if [[ -n "$DEPTH_MANIFEST" ]]; then
   python_args+=(--train_dataset.json_delta_action_dataset.depth_feature_manifest="$DEPTH_MANIFEST")
