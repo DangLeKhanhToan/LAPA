@@ -5,6 +5,12 @@ SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 PROJECT_DIR="$( cd -- "$( dirname -- "$SCRIPT_DIR" )" &> /dev/null && pwd )"
 cd "$PROJECT_DIR"
 
+# Training is a JAX-only process. Use an explicit interpreter so activating the
+# Torch Stage-2.5 environment cannot silently route training to the wrong CUDA /
+# cuDNN stack.
+TRAIN_PY="${TRAIN_PY:-${MODEL_PY:-python3}}"
+TRAIN_LD_LIBRARY_PATH="${TRAIN_LD_LIBRARY_PATH:-}"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -24,6 +30,7 @@ Options:
   --depth-bundle PATH           Prejoined bundle from build_lapa_depth_bundle.py. Preferred for training.
   --no-depth                    Run the RGB-only LAPA baseline through the same launcher.
   --action-bins PATH            Action-bin CSV. Default: <data-root>/action_bins_<suite>.csv, else <data-root>/action_bins.csv.
+  --action-vocab-size N         Explicit vocabulary size. Use for concat training with per-suite bins.
   --tokenizer PATH              Tokenizer model. Default: <root>/lapa_checkpoints/lapa_7b_sth/tokenizer.model, else tokenizer.model.
   --vqgan PATH                  VQGAN checkpoint. Default: <root>/lapa_checkpoints/vqgan.
   --init-params PATH            Initial LAPA params. Default: <root>/lapa_checkpoints/lapa_7b_sth/params.
@@ -125,6 +132,7 @@ DEPTH_MANIFEST=""
 DEPTH_BUNDLE=""
 NO_DEPTH="false"
 ACTION_SCALE_FILE=""
+ACTION_VOCAB_SIZE=""
 TOKENIZER_PATH=""
 VQGAN_CKPT=""
 LAPA_PARAMS=""
@@ -158,6 +166,7 @@ while [[ $# -gt 0 ]]; do
     --depth-bundle) DEPTH_BUNDLE="$2"; shift 2 ;;
     --no-depth) NO_DEPTH="true"; shift ;;
     --action-bins) ACTION_SCALE_FILE="$2"; shift 2 ;;
+    --action-vocab-size) ACTION_VOCAB_SIZE="$2"; shift 2 ;;
     --tokenizer) TOKENIZER_PATH="$2"; shift 2 ;;
     --vqgan) VQGAN_CKPT="$2"; shift 2 ;;
     --init-params) LAPA_PARAMS="$2"; shift 2 ;;
@@ -196,7 +205,9 @@ else
   DEPTH_DATA_DIR="${DEPTH_DATA_DIR:-$FEATURE_ROOT/stage25_libero_features_${STAGE25_MODEL_NAME}/$SUITE/stage25_${STAGE25_MODEL_NAME}/z_depth_train_shard0}"
   DEPTH_MANIFEST="${DEPTH_MANIFEST:-$(resolve_depth_manifests "$DEPTH_DATA_DIR")}"
 fi
-ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$(resolve_action_bins "$DATA_ROOT" "$SUITE")}"
+if [[ -z "$ACTION_VOCAB_SIZE" ]]; then
+  ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$(resolve_action_bins "$DATA_ROOT" "$SUITE")}"
+fi
 TOKENIZER_PATH="${TOKENIZER_PATH:-$(resolve_tokenizer "$LAPA_ROOT")}"
 VQGAN_CKPT="${VQGAN_CKPT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
 LAPA_PARAMS="${LAPA_PARAMS:-$LAPA_ROOT/lapa_checkpoints/lapa_7b_sth/params}"
@@ -223,12 +234,22 @@ esac
 
 [[ -f "$TRAIN_JSONL" ]] || { echo "ERROR: train JSONL not found: $TRAIN_JSONL" >&2; exit 1; }
 [[ -z "$DEPTH_BUNDLE" || -f "$DEPTH_BUNDLE" ]] || { echo "ERROR: depth bundle not found: $DEPTH_BUNDLE" >&2; exit 1; }
-[[ -f "$ACTION_SCALE_FILE" ]] || { echo "ERROR: action bins CSV not found: $ACTION_SCALE_FILE" >&2; exit 1; }
+if [[ -z "$ACTION_VOCAB_SIZE" ]]; then
+  [[ -f "$ACTION_SCALE_FILE" ]] || { echo "ERROR: action bins CSV not found: $ACTION_SCALE_FILE" >&2; exit 1; }
+  ACTION_VOCAB_SIZE="$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')"
+else
+  [[ "$ACTION_VOCAB_SIZE" =~ ^[0-9]+$ ]] || { echo "ERROR: action vocab size must be an integer" >&2; exit 1; }
+fi
 [[ -f "$TOKENIZER_PATH" ]] || { echo "ERROR: tokenizer not found: $TOKENIZER_PATH" >&2; exit 1; }
 [[ -e "$VQGAN_CKPT" ]] || { echo "ERROR: VQGAN checkpoint not found: $VQGAN_CKPT" >&2; exit 1; }
 [[ -e "$LAPA_PARAMS" ]] || { echo "ERROR: initial LAPA params not found: $LAPA_PARAMS" >&2; exit 1; }
+if [[ "$TRAIN_PY" == */* ]]; then
+  [[ -x "$TRAIN_PY" ]] || { echo "ERROR: TRAIN_PY is not executable: $TRAIN_PY" >&2; exit 1; }
+elif ! command -v "$TRAIN_PY" >/dev/null 2>&1; then
+  echo "ERROR: TRAIN_PY command not found: $TRAIN_PY" >&2
+  exit 1
+fi
 
-ACTION_VOCAB_SIZE="$(head -1 "$ACTION_SCALE_FILE" | awk -F, '{print NF}')"
 WANDB_DIR="$OUTPUT_DIR/$EXPERIMENT_ID/wandb"
 
 echo "[train-depth] root: $LAPA_ROOT"
@@ -242,7 +263,7 @@ echo "[train-depth] depth dir: $DEPTH_DATA_DIR"
 echo "[train-depth] depth manifest: ${DEPTH_MANIFEST:-<none>}"
 echo "[train-depth] depth bundle: ${DEPTH_BUNDLE:-<none>}"
 echo "[train-depth] RGB-only baseline: $NO_DEPTH"
-echo "[train-depth] action bins: $ACTION_SCALE_FILE"
+echo "[train-depth] action bins: ${ACTION_SCALE_FILE:-<per-suite bins encoded in JSONL>}"
 echo "[train-depth] action vocab size: $ACTION_VOCAB_SIZE"
 echo "[train-depth] init params: $LAPA_PARAMS"
 echo "[train-depth] output: $OUTPUT_DIR/$EXPERIMENT_ID"
@@ -250,6 +271,7 @@ echo "[train-depth] total steps: $TOTAL_STEPS | batch size: $BATCH_SIZE | lr: $L
 echo "[train-depth] save model freq: $SAVE_MODEL_FREQ"
 echo "[train-depth] save milestone freq: $SAVE_MILESTONE_FREQ | keep last milestones: $KEEP_LAST_MILESTONES"
 echo "[train-depth] save optimizer state: $SAVE_OPTIMIZER_STATE | autoresume: $AUTORESUME"
+echo "[train-depth] Python: $TRAIN_PY"
 
 python_args=(
   -u -m latent_pretraining.train
@@ -326,7 +348,7 @@ env -i \
   HOME="$HOME" \
   USER="${USER:-}" \
   PATH="$PATH" \
-  LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
+  LD_LIBRARY_PATH="$TRAIN_LD_LIBRARY_PATH" \
   CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-}" \
   PYTHONPATH="$LAPA_ROOT:${PYTHONPATH:-}" \
   XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}" \
@@ -335,7 +357,7 @@ env -i \
   JAX_PLATFORMS="${JAX_PLATFORMS:-cuda,cpu}" \
   WANDB_MODE="${WANDB_MODE:-offline}" \
   LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:---xla_tpu_megacore_fusion_allow_ags=false --xla_enable_async_collective_permute=true --xla_tpu_enable_ag_backward_pipelining=true --xla_tpu_enable_data_parallel_all_reduce_opt=true --xla_tpu_data_parallel_opt_different_sized_ops=true --xla_tpu_enable_async_collective_fusion=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_overlap_compute_collective_tc=true --xla_enable_async_all_gather=true}" \
-  python3 "${python_args[@]}"
+  "$TRAIN_PY" "${python_args[@]}"
 
 echo "[train-depth] params: $OUTPUT_DIR/$EXPERIMENT_ID/streaming_params"
 echo "[train-depth] train state: $OUTPUT_DIR/$EXPERIMENT_ID/streaming_train_state"

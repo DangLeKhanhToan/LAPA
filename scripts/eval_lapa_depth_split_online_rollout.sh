@@ -8,6 +8,12 @@ export PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}"
 
 MODEL_PY="${MODEL_PY:-python}"
 LIBERO_PY="${LIBERO_PY:-$MODEL_PY}"
+RGB_PY="${RGB_PY:-$MODEL_PY}"
+STAGE25_PY="${STAGE25_PY:-$MODEL_PY}"
+POLICY_PY="${POLICY_PY:-$MODEL_PY}"
+RGB_LD_LIBRARY_PATH="${RGB_LD_LIBRARY_PATH:-}"
+STAGE25_LD_LIBRARY_PATH="${STAGE25_LD_LIBRARY_PATH:-}"
+POLICY_LD_LIBRARY_PATH="${POLICY_LD_LIBRARY_PATH:-}"
 LAPA_ROOT="${LAPA_ROOT:-$PROJECT_DIR}"
 LIBERO_REPO="${LIBERO_REPO:?Set LIBERO_REPO to the simulator repository}"
 DEPTH_BRANCH_ROOT="${DEPTH_BRANCH_ROOT:?Set DEPTH_BRANCH_ROOT to the Stage-2.5 source bundle}"
@@ -129,11 +135,15 @@ echo "[split-rollout] action bins: $ACTION_SCALE_FILE"
 echo "[split-rollout] RGB baseline GPU: $RGB_CUDA_VISIBLE_DEVICES mesh=$RGB_MESH_DIM port=$RGB_PORT"
 echo "[split-rollout] Stage2.5 GPU: $STAGE25_CUDA_VISIBLE_DEVICES port=$STAGE25_PORT"
 echo "[split-rollout] Policy GPU: $POLICY_CUDA_VISIBLE_DEVICES mesh=$POLICY_MESH_DIM port=$POLICY_PORT"
+echo "[split-rollout] RGB Python: $RGB_PY"
+echo "[split-rollout] Stage2.5 Python: $STAGE25_PY"
+echo "[split-rollout] Policy Python: $POLICY_PY"
 echo "[split-rollout] Simulator EGL GPU: $MUJOCO_EGL_DEVICE_ID"
 echo "[split-rollout] Task IDs: $TASK_IDS"
 echo "[split-rollout] Eval per task: $N_EVAL_PER_TASK | max_steps=$MAX_STEPS | progress_freq=$PROGRESS_FREQ"
 
-CUDA_VISIBLE_DEVICES="$RGB_CUDA_VISIBLE_DEVICES" "$MODEL_PY" -m eval.lapa_rgb_feature_server \
+LD_LIBRARY_PATH="$RGB_LD_LIBRARY_PATH" CUDA_VISIBLE_DEVICES="$RGB_CUDA_VISIBLE_DEVICES" \
+  "$RGB_PY" -m eval.lapa_rgb_feature_server \
   --stage25_bundle_dir "$DEPTH_BRANCH_ROOT" \
   --original_lapa_checkpoint "$ORIGINAL_LAPA_CHECKPOINT" \
   --vqgan_checkpoint "$VQGAN_CHECKPOINT" \
@@ -166,11 +176,13 @@ if [[ "$DEPTH_ESTIMATOR_REQUIRED" == "true" ]]; then
     --depth_anything_device "$DEPTH_ANYTHING_DEVICE"
   )
 fi
-CUDA_VISIBLE_DEVICES="$STAGE25_CUDA_VISIBLE_DEVICES" "$MODEL_PY" "${stage25_args[@]}" \
+LD_LIBRARY_PATH="$STAGE25_LD_LIBRARY_PATH" CUDA_VISIBLE_DEVICES="$STAGE25_CUDA_VISIBLE_DEVICES" \
+  "$STAGE25_PY" "${stage25_args[@]}" \
   > "$STAGE25_LOG" 2>&1 &
 STAGE25_PID=$!
 
-CUDA_VISIBLE_DEVICES="$POLICY_CUDA_VISIBLE_DEVICES" "$MODEL_PY" -m latent_pretraining.deploy \
+LD_LIBRARY_PATH="$POLICY_LD_LIBRARY_PATH" CUDA_VISIBLE_DEVICES="$POLICY_CUDA_VISIBLE_DEVICES" \
+  "$POLICY_PY" -m latent_pretraining.deploy \
   --load_checkpoint "$FINETUNED_CHECKPOINT" \
   --action_scale_file "$ACTION_SCALE_FILE" \
   --vqgan_checkpoint "$VQGAN_CHECKPOINT" \

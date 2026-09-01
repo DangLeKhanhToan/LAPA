@@ -5,7 +5,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 MODEL="${MODEL:-model2}"
-DATA_ROOT="${DATA_ROOT:-$ROOT/datasets/lapa_libero_v2}"
+DATA_ROOT="${DATA_ROOT:-$ROOT/datasets/lapa_libero_v4}"
 FEATURE_ROOT="${FEATURE_ROOT:-$ROOT/datasets/features_depth_branch}"
 SUITES="${SUITES:-libero_spatial libero_object libero_goal libero_90}"
 
