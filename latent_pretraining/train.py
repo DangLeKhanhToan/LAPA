@@ -40,8 +40,15 @@ import numpy as np
 from flax.serialization import (from_bytes, from_state_dict, to_state_dict)
 from flax.traverse_util import empty_node, flatten_dict, unflatten_dict
 from tux.utils import open_file
-import tensorflow as tf
-tf.config.optimizer.set_jit(True)
+# TensorFlow is not part of the training pipeline below; the optimization and
+# data path are JAX/Flax. Keep the legacy TensorFlow JIT hint when TensorFlow is
+# available, but do not require it in the isolated JAX training environment.
+try:
+    import tensorflow as tf
+
+    tf.config.optimizer.set_jit(True)
+except ImportError:
+    tf = None
 import time
 try:
     import resource
