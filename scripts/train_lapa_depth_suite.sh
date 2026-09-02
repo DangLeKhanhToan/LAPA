@@ -18,8 +18,10 @@ Usage:
 
 Options:
   --lapa-root PATH              Repository root. Default: script parent directory.
-  --suite NAME                  Training split, e.g. libero_object/libero_goal/all. Default: libero_spatial.
+  --suite NAME                  Backward-compatible alias for --suites with one suite.
+  --suites LIST                 Space- or comma-separated training suites. Default: libero_spatial.
   --model NAME                  Stage-2.5 model name, e.g. model2/model4/model5. Default: model5.
+  --model-type NAME             Policy fusion architecture: project or concat. Default: project.
   --data-root PATH              LAPA LIBERO JSONL root. Default: <root>/datasets/lapa_libero_v2 if present, else lapa_libero_v1.
   --feature-root PATH           Offline feature root. Default: <root>/datasets/features_depth_branch.
   --train-jsonl PATH            Training JSONL. Default: <data-root>/<suite>.jsonl, or <suite>_train.jsonl if present.
@@ -35,7 +37,8 @@ Options:
   --vqgan PATH                  VQGAN checkpoint. Default: <root>/lapa_checkpoints/vqgan.
   --init-params PATH            Initial LAPA params. Default: <root>/lapa_checkpoints/lapa_7b_sth/params.
   --output-dir PATH             Output root. Default: <root>/outputs.
-  --experiment-id NAME          Run directory. Default: 128_batch_<model>_<suite>.
+  --id NAME                     Leading run ID used by the default experiment name. Default: <batch-size>_batch.
+  --experiment-id NAME          Run directory. Default: <id>_<stage2.5>_<model-type>_<suites>.
   --total-steps N              Total optimization steps. Default: 20000.
   --batch-size N               Global batch size. Default: 128.
   --seq-length N               Sequence length. Default: 384.
@@ -75,6 +78,51 @@ resolve_train_jsonl() {
   else
     printf '%s' "$data_root/${suite}.jsonl"
   fi
+}
+
+normalize_suites() {
+  local suites="${1//,/ }"
+  # shellcheck disable=SC2086
+  printf '%s\n' $suites | awk 'NF && !seen[$0]++' | paste -sd' ' -
+}
+
+suite_label() {
+  local suites="$1"
+  printf '%s' "${suites// /+}"
+}
+
+resolve_multi_train_jsonl() {
+  local data_root="$1"
+  local suites="$2"
+  local label="$3"
+  local canonical="libero_spatial libero_object libero_goal libero_90"
+  if [[ "$suites" == "$canonical" && -f "$data_root/all_train.jsonl" ]]; then
+    printf '%s' "$data_root/all_train.jsonl"
+    return
+  fi
+
+  local combined="$data_root/combined/${label}_train.jsonl"
+  mkdir -p "$(dirname "$combined")"
+  : > "$combined"
+  local split source
+  for split in $suites; do
+    source="$(resolve_train_jsonl "$data_root" "$split")"
+    [[ -f "$source" ]] || { echo "ERROR: train JSONL not found: $source" >&2; exit 1; }
+    cat "$source" >> "$combined"
+  done
+  printf '%s' "$combined"
+}
+
+resolve_depth_dirs() {
+  local feature_root="$1"
+  local model="$2"
+  local suites="$3"
+  local result="" split dir
+  for split in $suites; do
+    dir="$feature_root/stage25_libero_features_${model}/$split/stage25_${model}/z_depth_train_shard0"
+    result="${result:+$result,}$dir"
+  done
+  printf '%s' "$result"
 }
 
 resolve_action_bins() {
@@ -122,7 +170,10 @@ resolve_depth_manifests() {
 
 LAPA_ROOT="$PROJECT_DIR"
 SUITE="libero_spatial"
+SUITES=""
 STAGE25_MODEL_NAME="model5"
+MODEL_TYPE=""
+RUN_ID=""
 DATA_ROOT=""
 FEATURE_ROOT=""
 TRAIN_JSONL=""
@@ -156,7 +207,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --lapa-root) LAPA_ROOT="$2"; shift 2 ;;
     --suite) SUITE="$2"; shift 2 ;;
+    --suites) SUITES="$2"; shift 2 ;;
     --model) STAGE25_MODEL_NAME="$2"; shift 2 ;;
+    --model-type) MODEL_TYPE="$2"; shift 2 ;;
+    --id) RUN_ID="$2"; shift 2 ;;
     --data-root) DATA_ROOT="$2"; shift 2 ;;
     --feature-root) FEATURE_ROOT="$2"; shift 2 ;;
     --train-jsonl) TRAIN_JSONL="$2"; shift 2 ;;
@@ -192,7 +246,16 @@ done
 
 DATA_ROOT="${DATA_ROOT:-$(resolve_data_root "$LAPA_ROOT")}"
 FEATURE_ROOT="${FEATURE_ROOT:-$LAPA_ROOT/datasets/features_depth_branch}"
-TRAIN_JSONL="${TRAIN_JSONL:-$(resolve_train_jsonl "$DATA_ROOT" "$SUITE")}"
+SUITES="$(normalize_suites "${SUITES:-$SUITE}")"
+[[ -n "$SUITES" ]] || { echo "ERROR: --suites must contain at least one suite" >&2; exit 1; }
+SUITE_LABEL="$(suite_label "$SUITES")"
+if [[ -z "$TRAIN_JSONL" ]]; then
+  if [[ "$SUITES" == *" "* ]]; then
+    TRAIN_JSONL="$(resolve_multi_train_jsonl "$DATA_ROOT" "$SUITES" "$SUITE_LABEL")"
+  else
+    TRAIN_JSONL="$(resolve_train_jsonl "$DATA_ROOT" "$SUITES")"
+  fi
+fi
 IMAGE_ROOT="${IMAGE_ROOT:-$DATA_ROOT/}"
 if [[ "$NO_DEPTH" == "true" ]]; then
   DEPTH_DATA_DIR=""
@@ -202,17 +265,26 @@ elif [[ -n "$DEPTH_BUNDLE" ]]; then
   DEPTH_DATA_DIR=""
   DEPTH_MANIFEST=""
 else
-  DEPTH_DATA_DIR="${DEPTH_DATA_DIR:-$FEATURE_ROOT/stage25_libero_features_${STAGE25_MODEL_NAME}/$SUITE/stage25_${STAGE25_MODEL_NAME}/z_depth_train_shard0}"
+  DEPTH_DATA_DIR="${DEPTH_DATA_DIR:-$(resolve_depth_dirs "$FEATURE_ROOT" "$STAGE25_MODEL_NAME" "$SUITES")}"
   DEPTH_MANIFEST="${DEPTH_MANIFEST:-$(resolve_depth_manifests "$DEPTH_DATA_DIR")}"
 fi
 if [[ -z "$ACTION_VOCAB_SIZE" ]]; then
-  ACTION_SCALE_FILE="${ACTION_SCALE_FILE:-$(resolve_action_bins "$DATA_ROOT" "$SUITE")}"
+  if [[ -z "$ACTION_SCALE_FILE" ]]; then
+    if [[ "$SUITES" == *" "* ]]; then
+      ACTION_SCALE_FILE="$DATA_ROOT/action_bins.csv"
+    else
+      ACTION_SCALE_FILE="$(resolve_action_bins "$DATA_ROOT" "$SUITES")"
+    fi
+  fi
 fi
 TOKENIZER_PATH="${TOKENIZER_PATH:-$(resolve_tokenizer "$LAPA_ROOT")}"
 VQGAN_CKPT="${VQGAN_CKPT:-$LAPA_ROOT/lapa_checkpoints/vqgan}"
 LAPA_PARAMS="${LAPA_PARAMS:-$LAPA_ROOT/lapa_checkpoints/lapa_7b_sth/params}"
 OUTPUT_DIR="${OUTPUT_DIR:-$LAPA_ROOT/outputs}"
-EXPERIMENT_ID="${EXPERIMENT_ID:-128_batch_${STAGE25_MODEL_NAME}_${SUITE}}"
+MODEL_TYPE="${MODEL_TYPE:-$ACTION_FUSION_METHOD}"
+ACTION_FUSION_METHOD="$MODEL_TYPE"
+RUN_ID="${RUN_ID:-${BATCH_SIZE}_batch}"
+EXPERIMENT_ID="${EXPERIMENT_ID:-${RUN_ID}_${STAGE25_MODEL_NAME}_${MODEL_TYPE}_${SUITE_LABEL}}"
 SAVE_MODEL_FREQ="${SAVE_MODEL_FREQ:-$TOTAL_STEPS}"
 
 case "$ACTION_FUSION_METHOD" in
@@ -253,7 +325,7 @@ fi
 WANDB_DIR="$OUTPUT_DIR/$EXPERIMENT_ID/wandb"
 
 echo "[train-depth] root: $LAPA_ROOT"
-echo "[train-depth] suite: $SUITE"
+echo "[train-depth] suites: $SUITES"
 echo "[train-depth] model: $STAGE25_MODEL_NAME"
 echo "[train-depth] fusion: $ACTION_FUSION_METHOD"
 echo "[train-depth] attention backend: $ATTENTION_BACKEND"
