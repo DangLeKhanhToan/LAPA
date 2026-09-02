@@ -10,6 +10,7 @@ import numpy as np
 from absl.app import run
 import absl.logging as logging
 import tux
+import wandb
 
 import jax
 import jax.numpy as jnp
@@ -56,6 +57,26 @@ except ImportError:
     resource = None
 
 random.seed(time.time())
+
+
+def _install_wandb_settings_compat():
+    """Let the legacy Tux logger run with modern W&B releases.
+
+    Older Tux versions construct ``wandb.Settings(start_method="thread")``.
+    W&B 0.29 removed that field and rejects it through Pydantic before the
+    logger can start.  Dropping only this retired option avoids pinning the
+    whole environment to old Pydantic / protobuf releases.
+    """
+    original_settings = wandb.Settings
+
+    def compatible_settings(*args, **kwargs):
+        kwargs.pop("start_method", None)
+        return original_settings(*args, **kwargs)
+
+    wandb.Settings = compatible_settings
+
+
+_install_wandb_settings_compat()
 
 
 def _format_bytes(num_bytes):
