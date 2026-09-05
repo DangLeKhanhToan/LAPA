@@ -303,6 +303,9 @@ for suite in $SUITES; do
     TRACK_DIAGNOSTICS="${TRACK_DIAGNOSTICS:-false}" \
     REFERENCE_SUITE="${REFERENCE_SUITE:-auto}" \
     APPROACH_THRESHOLD="${APPROACH_THRESHOLD:-0.10}" \
+    EXPECTED_EPISODES="${EXPECTED_EPISODES:-}" \
+    AUTO_SUMMARIZE_DIAGNOSTICS="${AUTO_SUMMARIZE_DIAGNOSTICS:-true}" \
+    LIBERO_LD_LIBRARY_PATH="${LIBERO_LD_LIBRARY_PATH:-${LD_LIBRARY_PATH:-}}" \
     OUTPUT_DIR="$suite_output" \
     LOG_DIR="$suite_log_dir" \
     bash "$SCRIPT_DIR/eval_lapa_depth_split_online_rollout.sh"

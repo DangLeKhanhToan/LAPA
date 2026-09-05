@@ -33,10 +33,25 @@ def percent(value):
     return "NA" if value is None else f"{100.0 * value:.1f}%"
 
 
+def narrative(suite, metrics):
+    return (
+        f"In {metrics['n_episodes']} {suite} episodes, "
+        f"{percent(metrics['approached_original_target_location_rate'])} "
+        "approached the original target location, "
+        f"{percent(metrics['grasped_wrong_object_rate'])} grasped a wrong object, "
+        f"{percent(metrics['grasped_correct_object_rate'])} grasped the correct object, "
+        "and "
+        f"{percent(metrics['drop_rate_among_episodes_with_grasp'])} of episodes "
+        "that grasped an object dropped it before task success."
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("rollout_dirs", nargs="+")
     parser.add_argument("--csv", dest="csv_path", default="")
+    parser.add_argument("--json", dest="json_path", default="")
+    parser.add_argument("--markdown", dest="markdown_path", default="")
     args = parser.parse_args()
 
     rows = []
@@ -54,24 +69,17 @@ def main():
             )
             row = {
                 "rollout_dir": os.path.realpath(rollout_dir),
+                "run_name": os.path.basename(os.path.realpath(rollout_dir)),
                 "suite": suite,
                 **metrics,
                 "n_unresolved_targets": unresolved,
                 "n_fallback_targets": fallback,
             }
+            row["narrative"] = narrative(suite, metrics)
             rows.append(row)
 
             print(f"\n[{suite}] {metrics['n_episodes']} episodes")
-            print(
-                f"In {metrics['n_episodes']} {suite} episodes, "
-                f"{percent(metrics['approached_original_target_location_rate'])} "
-                "approached the original target location, "
-                f"{percent(metrics['grasped_wrong_object_rate'])} grasped a wrong object, "
-                f"{percent(metrics['grasped_correct_object_rate'])} grasped the correct object, "
-                "and "
-                f"{percent(metrics['drop_rate_among_episodes_with_grasp'])} of episodes "
-                "that grasped an object dropped it before task success."
-            )
+            print(row["narrative"])
             print(
                 "Validation: "
                 f"exact_grasp={metrics['n_episodes_with_exact_grasp_check']}/"
@@ -87,6 +95,35 @@ def main():
             writer.writeheader()
             writer.writerows(rows)
         print(f"\nWrote {args.csv_path}")
+
+    if args.json_path:
+        os.makedirs(os.path.dirname(os.path.realpath(args.json_path)), exist_ok=True)
+        with open(args.json_path, "w", encoding="utf-8") as handle:
+            json.dump(rows, handle, indent=2)
+        print(f"Wrote {args.json_path}")
+
+    if args.markdown_path:
+        os.makedirs(os.path.dirname(os.path.realpath(args.markdown_path)), exist_ok=True)
+        with open(args.markdown_path, "w", encoding="utf-8") as handle:
+            handle.write("# LIBERO-Pro diagnostic summary\n\n")
+            handle.write(
+                "| Run | Suite | Episodes | Success | Original location | "
+                "Wrong object | Correct object | Drop after grasp |\n"
+            )
+            handle.write("|---|---|---:|---:|---:|---:|---:|---:|\n")
+            for row in rows:
+                handle.write(
+                    f"| {row['run_name']} | {row['suite']} | {row['n_episodes']} | "
+                    f"{percent(row['success_rate'])} | "
+                    f"{percent(row['approached_original_target_location_rate'])} | "
+                    f"{percent(row['grasped_wrong_object_rate'])} | "
+                    f"{percent(row['grasped_correct_object_rate'])} | "
+                    f"{percent(row['drop_rate_among_episodes_with_grasp'])} |\n"
+                )
+            handle.write("\n## Narrative\n\n")
+            for row in rows:
+                handle.write(f"- **{row['run_name']}**: {row['narrative']}\n")
+        print(f"Wrote {args.markdown_path}")
 
 
 if __name__ == "__main__":

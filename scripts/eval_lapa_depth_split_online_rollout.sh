@@ -61,6 +61,9 @@ PROGRESS_FREQ="${PROGRESS_FREQ:-25}"
 TRACK_DIAGNOSTICS="${TRACK_DIAGNOSTICS:-false}"
 REFERENCE_SUITE="${REFERENCE_SUITE:-auto}"
 APPROACH_THRESHOLD="${APPROACH_THRESHOLD:-0.10}"
+EXPECTED_EPISODES="${EXPECTED_EPISODES:-}"
+AUTO_SUMMARIZE_DIAGNOSTICS="${AUTO_SUMMARIZE_DIAGNOSTICS:-true}"
+LIBERO_LD_LIBRARY_PATH="${LIBERO_LD_LIBRARY_PATH:-${LD_LIBRARY_PATH:-}}"
 
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.80}"
@@ -86,6 +89,21 @@ if [[ "$DEPTH_ESTIMATOR_REQUIRED" == "true" ]]; then
   [[ -d "$DEPTH_ANYTHING_REPO_DIR/depth_anything_v2" ]] || { echo "ERROR: DEPTH_ANYTHING_REPO_DIR is not a DepthAnythingV2 repo: $DEPTH_ANYTHING_REPO_DIR" >&2; exit 1; }
   [[ -f "$DEPTH_ANYTHING_CHECKPOINT" ]] || { echo "ERROR: DEPTH_ANYTHING_CHECKPOINT not found: $DEPTH_ANYTHING_CHECKPOINT" >&2; exit 1; }
 fi
+
+# Verify the simulator package before allocating memory for three model servers.
+LD_LIBRARY_PATH="$LIBERO_LD_LIBRARY_PATH" \
+PYTHONPATH="$LIBERO_REPO:$PROJECT_DIR:${PYTHONPATH:-}" \
+"$LIBERO_PY" - "$SUITE" <<'PY'
+import sys
+from libero.libero import benchmark
+
+suite = sys.argv[1]
+available = benchmark.get_benchmark_dict()
+print(f"[split-rollout] simulator suites available: {len(available)}")
+if suite not in available:
+    raise SystemExit(f"ERROR: simulator does not register suite: {suite}")
+print(f"[split-rollout] suite registry PASS: {suite}")
+PY
 
 mkdir -p "$LOG_DIR" "$OUTPUT_DIR"
 RGB_LOG="$LOG_DIR/rgb_feature_gpu${RGB_CUDA_VISIBLE_DEVICES//,/}.log"
@@ -209,8 +227,9 @@ if [[ "$TRACK_DIAGNOSTICS" == "true" ]]; then
   )
 fi
 
-MUJOCO_GL="${MUJOCO_GL:-egl}" PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}" \
-MUJOCO_EGL_DEVICE_ID="$MUJOCO_EGL_DEVICE_ID" PYTHONPATH="$LIBERO_REPO:$PROJECT_DIR:${PYTHONPATH:-}" \
+LD_LIBRARY_PATH="$LIBERO_LD_LIBRARY_PATH" MUJOCO_GL="${MUJOCO_GL:-egl}" \
+PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}" MUJOCO_EGL_DEVICE_ID="$MUJOCO_EGL_DEVICE_ID" \
+PYTHONPATH="$LIBERO_REPO:$PROJECT_DIR:${PYTHONPATH:-}" \
 "$LIBERO_PY" "$PROJECT_DIR/eval/eval_libero_rollout_depth.py" \
   --server_url "http://127.0.0.1:${POLICY_PORT}/act" \
   --output_dir "$OUTPUT_DIR" \
@@ -221,5 +240,30 @@ MUJOCO_EGL_DEVICE_ID="$MUJOCO_EGL_DEVICE_ID" PYTHONPATH="$LIBERO_REPO:$PROJECT_D
   --init_offset "$INIT_OFFSET" \
   --progress_freq "$PROGRESS_FREQ" \
   "${diagnostic_args[@]}"
+
+LD_LIBRARY_PATH="$LIBERO_LD_LIBRARY_PATH" PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}" \
+"$LIBERO_PY" - "$OUTPUT_DIR/results.json" "$EXPECTED_EPISODES" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as stream:
+    results = json.load(stream)
+n_eval = int(results.get("overall", {}).get("n_eval", 0))
+expected = sys.argv[2]
+print(f"[split-rollout] evaluated episodes: {n_eval}")
+if n_eval <= 0:
+    raise SystemExit("ERROR: rollout evaluated zero episodes")
+if expected and n_eval != int(expected):
+    raise SystemExit(f"ERROR: expected {expected} episodes, got {n_eval}")
+print("[split-rollout] episode count: PASS")
+PY
+
+if [[ "$TRACK_DIAGNOSTICS" == "true" && "$AUTO_SUMMARIZE_DIAGNOSTICS" == "true" ]]; then
+  LD_LIBRARY_PATH="$LIBERO_LD_LIBRARY_PATH" PYTHONPATH="$PROJECT_DIR:${PYTHONPATH:-}" \
+  "$LIBERO_PY" -m eval.summarize_libero_diagnostics "$OUTPUT_DIR" \
+    --csv "$OUTPUT_DIR/diagnostic_summary.csv" \
+    --json "$OUTPUT_DIR/diagnostic_summary.json" \
+    --markdown "$OUTPUT_DIR/diagnostic_summary.md"
+fi
 
 echo "[split-rollout] wrote results/videos to $OUTPUT_DIR"
